@@ -387,7 +387,7 @@ Always verify important financial information independently.
 
 Copyright © 2026 MONEYLOG contributors.
 
-Released under the **MIT License**. See [`LICENSE`](LICENSE) for the complete license text.
+Released under the **MIT License**.
 
 ---
 
