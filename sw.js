@@ -1,4 +1,4 @@
-const CACHE_VERSION='moneylog-cache-2.5.2';
+const CACHE_VERSION='moneylog-cache-2.5.3';
 const CORE=['./','./index.html','./demo.html','./manifest.json','./version.json','./assets/styles.css','./assets/app.js','./assets/icon.svg','./assets/icon-192.png','./assets/icon-512.png'];
 self.addEventListener('install',event=>event.waitUntil((async()=>{
   const cache=await caches.open(CACHE_VERSION);

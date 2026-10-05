@@ -1,10 +1,10 @@
 /* MONEYLOG PWA - local-first encrypted personal finance journal */
-const APP_VERSION = '2.5.2';
+const APP_VERSION = '2.5.3';
 const UPDATE_MANIFEST_URL = './version.json';
 const DB_NAME = 'moneylog-secure-v2';
 const DB_VERSION = 1;
 const PBKDF2_ITERATIONS = 220000;
-const REMIND_LATER_MS = 6 * 60 * 60 * 1000;
+const REMIND_LATER_MS = 24 * 60 * 60 * 1000;
 const CURRENCIES = { BDT: '৳', USD: '$', EUR: '€', GBP: '£', INR: '₹' };
 const DEFAULT_CATEGORIES = {
   expense: ['Food','Transport','Shopping','Bills','Education','Health','Entertainment','Housing','Family','Personal','Other'],
@@ -31,6 +31,8 @@ let protectedBackupWriteTimer = null;
 let protectedBackupWriting = false;
 let updateReloadPending = false;
 let updateUiOpen = false;
+let updateMonitorTimer = null;
+let updatePromptTimer = null;
 let storageProtectionStatus = { persistent:false, backup:false, backupName:'', lastBackupAt:'', snapshot:false, snapshotAt:'' };
 let vaultSaveChain=Promise.resolve();
 const SESSION_KEY_NAME = 'moneylog-session-key';
@@ -46,6 +48,12 @@ const todayISO = () => {
 const monthKey = d => d.slice(0,7);
 const uuid = () => crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 const clamp = (n,min,max) => Math.min(max,Math.max(min,n));
+function compareVersions(a,b){
+  const parse=v=>String(v||'0').replace(/^v/i,'').split(/[.-]/).map(part=>{const m=String(part).match(/^\d+/);return m?Number(m[0]):0;});
+  const aa=parse(a),bb=parse(b),len=Math.max(aa.length,bb.length);
+  for(let i=0;i<len;i++){const x=aa[i]||0,y=bb[i]||0;if(x!==y)return x-y;}
+  return 0;
+}
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const sleep = ms => new Promise(r=>setTimeout(r,ms));
 
@@ -520,13 +528,14 @@ async function finishUnlock(options={}){
   resetAutoLockTimer();
   await ensureRecoveryProfile();
   await checkForUpdate(true);
+  startUpdateMonitor();
   renderApp();
   maybeShowInstallChoice();
   if(options.newVault)setTimeout(()=>maybeShowDataShieldPrompt(),1400);
 }
 function lockApp(silent=false){
   clearSession();
-  sessionKey=null; state=null; clearTimeout(autoLockTimer); renderAuth('login'); if(!silent)showToast('MONEYLOG locked.');
+  sessionKey=null; state=null; clearTimeout(autoLockTimer); stopUpdateMonitor(); renderAuth('login'); if(!silent)showToast('MONEYLOG locked.');
 }
 function resetAutoLockTimer(){
   clearTimeout(autoLockTimer);
@@ -865,33 +874,70 @@ function installInstructions(){
   modal('Install MONEYLOG',`<p class="muted">Your browser did not expose the one-tap install prompt yet. MONEYLOG is still installable.</p><div class="install-guide"><div class="guide-step"><strong>Chrome on Android</strong><span>Open the browser menu <b>⋮</b> and choose <b>Install app</b> or <b>Add to Home screen</b>.</span></div><div class="guide-step"><strong>Safari on iPhone</strong><span>Tap <b>Share</b> → <b>Add to Home Screen</b>.</span></div><div class="guide-step"><strong>Desktop</strong><span>Use the install icon in the browser address bar when available.</span></div></div><div class="web-warning"><strong>Why install?</strong><br>The installed Web App gets its own app-style window and is the recommended way to use MONEYLOG daily.</div><div class="modal-actions"><button class="btn btn-ghost" data-action="close-modal">Maybe later</button></div>`);
 }
 
+function queueUpdatePrompt(delay=160){
+  clearTimeout(updatePromptTimer);
+  const tryOpen=()=>{
+    if(!updateInfo || !state) return;
+    const root=$('#modal-root');
+    if(root?.dataset.open){ updatePromptTimer=setTimeout(tryOpen,900); return; }
+    openUpdateModal();
+  };
+  updatePromptTimer=setTimeout(tryOpen,delay);
+}
+
 async function checkForUpdate(force=false){
   try{
     const last=Number(localStorage.getItem('moneylog-update-check')||0);
-    if(!force&&Date.now()-last<15*60*1000)return {status:'skipped'};
+    if(!force&&Date.now()-last<10*60*1000)return {status:'skipped'};
     localStorage.setItem('moneylog-update-check',String(Date.now()));
+
+    if(navigator.onLine===false) return {status:'offline'};
+
     const reg=await navigator.serviceWorker?.getRegistration?.();
-    if(reg) await reg.update().catch(()=>{});
-    const stamp=`${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const res=await fetch(`${UPDATE_MANIFEST_URL}?check=${stamp}`,{cache:'no-store',headers:{'Cache-Control':'no-cache'}});
-    if(!res.ok) return {status:'error',reason:'HTTP_'+res.status};
+    if(reg) await Promise.race([reg.update().catch(()=>{}),sleep(3500)]);
+
+    const url=new URL(UPDATE_MANIFEST_URL,location.href);
+    url.searchParams.set('moneylog-check',`${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const controller=new AbortController();
+    const timeout=setTimeout(()=>controller.abort(),9000);
+    let res;
+    try{
+      res=await fetch(url.toString(),{cache:'no-store',credentials:'same-origin',redirect:'follow',signal:controller.signal});
+    }finally{clearTimeout(timeout);}
+    if(!res.ok) return {status:'error',reason:`HTTP_${res.status}`};
     const info=await res.json();
+    if(!info?.version) return {status:'error',reason:'INVALID_VERSION_MANIFEST'};
+
     if(compareVersions(info.version,APP_VERSION)>0){
       updateInfo=info;
       const dismissed=Number(localStorage.getItem('moneylog-update-dismiss-'+info.version)||0);
-      const shouldRemind=!dismissed||Date.now()-dismissed>REMIND_LATER_MS;
+      const shouldRemind=!dismissed||Date.now()-dismissed>=REMIND_LATER_MS;
       if(state) renderApp();
-      if(state&&shouldRemind)setTimeout(()=>openUpdateModal(),160);
+      if(state&&shouldRemind)queueUpdatePrompt();
       return {status:'available',version:info.version,reminded:shouldRemind,info};
     }
+
     updateInfo=null;
     if(state) renderApp();
     return {status:'current',version:info.version,info};
   }catch(err){
     console.error('MONEYLOG update check failed',err);
-    return {status:'error',reason:err?.message||'NETWORK_ERROR'};
+    return {status:'error',reason:err?.name==='AbortError'?'TIMEOUT':err?.message||'NETWORK_ERROR'};
   }
 }
+
+function startUpdateMonitor(){
+  clearInterval(updateMonitorTimer);
+  clearTimeout(updatePromptTimer);
+  updateMonitorTimer=setInterval(()=>{if(state&&document.visibilityState!=='hidden')checkForUpdate(false);},5*60*1000);
+}
+function stopUpdateMonitor(){
+  clearInterval(updateMonitorTimer);
+  clearTimeout(updatePromptTimer);
+  updateMonitorTimer=null;
+  updatePromptTimer=null;
+}
+
 function openUpdateModal(){
   if(!updateInfo||$('#modal-root').dataset.open)return;
   modal(updateInfo.title||'MONEYLOG update',`<p class="update-lead">A newer MONEYLOG version <strong>${esc(updateInfo.version)}</strong> is ready.</p><div class="update-notes">${(updateInfo.notes||[]).map(n=>`<div><span>${ICONS.check}</span>${esc(n)}</div>`).join('')}</div><div class="modal-actions"><button class="btn btn-ghost" data-action="remind-update">Remind me later</button><button class="btn btn-primary" data-action="apply-update">Update now</button></div>`);
@@ -901,13 +947,20 @@ function showUpdateProgress(){
   modal('Updating MONEYLOG',`<div class="update-progress"><div class="update-spinner"></div><strong id="update-progress-title">Preparing update…</strong><span id="update-progress-copy">Refreshing the app shell before switching versions.</span><div class="update-steps"><span class="active">Prepare</span><span>Install</span><span>Reload</span></div></div>`,{wide:false});
 }
 function updateProgress(title,copy,step=0){$('#update-progress-title')?.replaceChildren(document.createTextNode(title));$('#update-progress-copy')?.replaceChildren(document.createTextNode(copy));$$('.update-steps span').forEach((el,i)=>el.classList.toggle('active',i<=step));}
-function waitForControllerChange(timeout=12000,target=null){
+function waitForControllerChange(timeout=15000,target=null){
   return new Promise(resolve=>{
     let done=false;
     const finish=changed=>{if(done)return;done=true;navigator.serviceWorker.removeEventListener('controllerchange',onChange);clearTimeout(timer);resolve(changed);};
-    const onChange=()=>finish(!target||navigator.serviceWorker.controller===target);
+    const current=navigator.serviceWorker.controller;
+    if(target && current===target){finish(true);return;}
+    const onChange=()=>{
+      const controller=navigator.serviceWorker.controller;
+      finish(!target||controller===target||(!current&&!!controller));
+    };
     const timer=setTimeout(()=>finish(false),timeout);
     navigator.serviceWorker.addEventListener('controllerchange',onChange);
+    const afterAttach=navigator.serviceWorker.controller;
+    if(target && afterAttach===target)finish(true);
   });
 }
 function waitForWorkerInstalled(worker,timeout=12000){
@@ -946,8 +999,8 @@ async function waitForNewWorker(reg,timeout=15000){
 }
 async function refreshAppShellCache(){
   if(!('caches' in window))throw new Error('NO_CACHE_STORAGE');
-  const names=await caches.keys();
-  const cacheName=names.find(name=>name.startsWith('moneylog-cache-'));
+  const names=(await caches.keys()).filter(name=>name.startsWith('moneylog-cache-')).sort();
+  const cacheName=names.at(-1);
   if(!cacheName)throw new Error('NO_APP_CACHE');
   const cache=await caches.open(cacheName);
   const assets=['./','./index.html','./demo.html','./manifest.json','./version.json','./assets/styles.css','./assets/app.js','./assets/icon.svg','./assets/icon-192.png','./assets/icon-512.png'];
@@ -965,47 +1018,50 @@ async function applyUpdate(){
   updateReloadPending=true;
   showUpdateProgress();
   try{
-    const reg=await navigator.serviceWorker.getRegistration() || await navigator.serviceWorker.register('./sw.js',{updateViaCache:'none'});
-    updateProgress('Checking the new app shell…','Refreshing the service worker without touching your financial records.',0);
-    await reg.update();
+    const reg=await navigator.serviceWorker?.getRegistration?.() || await navigator.serviceWorker.register('./sw.js',{updateViaCache:'none'});
     const previousController=navigator.serviceWorker.controller;
+
+    updateProgress('Checking the new app shell…','Fetching the latest release and preparing the handoff.',0);
+    await Promise.race([reg.update().catch(()=>{}),sleep(8000)]);
+
     let worker=reg.waiting||reg.installing;
-    if(worker && worker.state==='installing'){
+    if(worker?.state==='installing'){
       updateProgress('Installing the update…','Downloading the new app shell now.',1);
-      await waitForWorkerInstalled(worker,12000);
-      worker=reg.waiting||reg.active||worker;
+      const installed=await waitForWorkerInstalled(worker,15000);
+      if(!installed && worker.state==='redundant') throw new Error('UPDATE_WORKER_REDUNDANT');
+      worker=reg.waiting||reg.installing||worker;
     }
+
     if(reg.waiting){
       worker=reg.waiting;
-      updateProgress('Activating the update…','Switching this open page to the new app shell.',1);
-      const controllerPromise=(previousController && reg.waiting!==previousController)?waitForControllerChange(12000,reg.waiting):Promise.resolve(navigator.serviceWorker.controller===reg.waiting);
-      reg.waiting.postMessage({type:'SKIP_WAITING'});
+      updateProgress('Activating the update…','Switching this open tab to the new version.',1);
+      const controllerPromise=waitForControllerChange(15000,worker);
+      worker.postMessage({type:'SKIP_WAITING'});
       const changed=await controllerPromise;
       if(!changed){
-        // Some browsers activate the worker without dispatching controllerchange to an already-open tab.
-        await sleep(250);
-        if(navigator.serviceWorker.controller!==reg.active){
-          await refreshAppShellCache();
-        }
+        updateProgress('Finalizing the update…','Refreshing the app files directly so you do not need to reopen MONEYLOG.',1);
+        await refreshAppShellCache();
       }
     }else if(previousController && reg.active && reg.active!==previousController){
-      // The worker activated very quickly; let clients.claim() finish the handoff if needed.
-      await waitForControllerChange(2500,reg.active).catch(()=>false);
+      updateProgress('Finalizing the update…','The new worker is already active. Completing the handoff.',1);
+      const changed=await waitForControllerChange(4000,reg.active);
+      if(!changed) await refreshAppShellCache();
     }else{
-      // Fallback for deployments where the service-worker script did not change.
-      updateProgress('Refreshing app files…','Updating the current app shell directly so one click is enough.',1);
+      updateProgress('Refreshing app files…','Updating the current app shell directly.',1);
       await refreshAppShellCache();
     }
-    updateProgress('Opening the updated app…','The new version is ready. Reloading now.',2);
+
+    updateProgress('Opening the updated app…','The new version is ready. Reloading once.',2);
     try{localStorage.setItem('moneylog-pending-update',updateInfo?.version||'');}catch{}
-    setTimeout(()=>location.reload(),180);
+    await sleep(250);
+    location.reload();
   }catch(err){
     console.error(err);
     updateReloadPending=false;
     updateUiOpen=false;
     try{localStorage.removeItem('moneylog-pending-update');}catch{}
     closeModal();
-    showToast('Update could not be completed. Your current version is still safe.');
+    showToast('The update could not finish right now. Your current MONEYLOG data is safe.');
   }
 }
 
@@ -1013,12 +1069,12 @@ async function registerSW(){
   if(!('serviceWorker' in navigator))return null;
   try{
     const reg=await navigator.serviceWorker.register('./sw.js',{updateViaCache:'none'});
-    await reg.update().catch(()=>{});
     const pending=localStorage.getItem('moneylog-pending-update');
     if(pending && pending===APP_VERSION) localStorage.removeItem('moneylog-pending-update');
     return reg;
   }catch{return null;}
 }
+
 
 function demoState(){
   const s=defaultState();
@@ -1094,7 +1150,8 @@ $('#app').addEventListener('click',async e=>{
       const result=await checkForUpdate(true);
       if(result.status==='available') showToast(`Version ${result.version} is available.`);
       else if(result.status==='current') showToast('You are up to date.');
-      else if(result.status==='error') showToast('Could not check for updates. Check your connection and try again.');
+      else if(result.status==='offline') showToast('You are offline. The update check will retry automatically when you are back online.');
+      else if(result.status==='error') showToast('The update service did not respond. MONEYLOG will keep checking automatically.');
       renderApp();
     }
     else if(action==='setup-data-shield')await enableProtectedBackup();
@@ -1149,9 +1206,10 @@ function maybeShowDataShieldPrompt(attempt=0){
 }
 
 window.addEventListener('appinstalled',()=>{localStorage.setItem('moneylog-installed','1');localStorage.setItem('moneylog-entry-choice','install');deferredInstallPrompt=null;closeModal();showToast('MONEYLOG was installed.');if(state){requestPersistentStorage().then(()=>refreshStorageProtectionStatus()).then(()=>maybeShowDataShieldPrompt());}});
-window.addEventListener('online',()=>{checkForUpdate(true);if(state){refreshStorageProtectionStatus().then(()=>renderApp());}});
+window.addEventListener('online',()=>{if(state)checkForUpdate(true);if(state){refreshStorageProtectionStatus().then(()=>renderApp());}});
 window.addEventListener('offline',()=>{if(state)renderApp();});
-window.addEventListener('focus',()=>{if(state){checkForUpdate();checkReminderDue();}});
+window.addEventListener('focus',()=>{if(state){checkForUpdate(false);checkReminderDue();}});
+document.addEventListener('visibilitychange',()=>{if(state&&document.visibilityState==='visible'){checkForUpdate(false);checkReminderDue();}});
 
 $('#modal-root').addEventListener('click',async e=>{
   if(e.target.matches('[data-modal-bg]')){closeModal();return;}

@@ -239,7 +239,7 @@ for a local username, password, and recovery code. After setup, the normal priva
 local-vault experience continues as usual. The explicit `demo.html` and `?demo=1`
 entry points remain available for the same read-only preview.
 
-## 2.5.2
+## 2.5.3
 
 This release makes the sign-in and sign-up screens keyboard-safe on mobile, hardens the
 manual update check so it performs a fresh version lookup immediately, reports connection
