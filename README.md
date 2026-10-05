@@ -1,45 +1,51 @@
-# MONEYLOG — User Guide
+# MONEYLOG
 
-## What is MONEYLOG?
-MONEYLOG is a private personal money journal. Use it to record income, expenses, transfers, budgets, goals and recurring entries, then understand your money through simple history and insights.
+MONEYLOG is a private, local-first money journal for recording income, expenses, transfers, budgets, recurring entries, savings goals and financial insights.
 
-### The recommended way to use it
-**Install MONEYLOG as a Web App.** It opens like a normal phone app and is the preferred everyday experience. The browser version also works, but browser/site-data cleanup can remove the local vault.
+## Using MONEYLOG
 
-Keep an encrypted **`.moneylog` backup** somewhere outside the browser. That file is separate from browser cache and must be deliberately deleted if you no longer want it.
+Create a local username, password and recovery code when you first open the app. These credentials are for the local vault on this device; MONEYLOG does not create an online account.
 
-## First time setup
-On your first launch, MONEYLOG asks you to create:
+The recommended setup is **Install Web App**. It gives MONEYLOG its own app-style window and makes the normal mobile workflow easier. The browser version is available too, but browser storage can be removed by site-data cleanup, storage management, browser reset, or uninstalling browser data.
 
-- A local **username**
-- A **password**
-- A **recovery code**
+For anything important, keep an encrypted `.moneylog` backup outside the browser. The backup is protected by a password chosen when the file is created.
 
-The username is only for this device; it is not an online account. Your recovery code is the password-reset method, so keep it somewhere safe. MONEYLOG cannot email or retrieve a lost recovery code.
+## Main areas
 
-## Everyday use
-From Home, you can quickly add:
+**Home** shows total available money, the current month's income and expenses, a monthly budget, recent activity, and the accounts in use.
 
-**Expense** — money you spent.  
-**Income** — money you received.  
-**Transfer** — money moved between your own accounts.
+**History** is the searchable transaction record. Transactions can be filtered and edited without changing the meaning of transfers in reports.
 
-Transfers do not count as income or expenses.
+**Insights** summarizes cash flow, category spending and account balances over useful time ranges.
 
-## Your accounts
-You can keep Cash, bank, savings and other personal accounts. MONEYLOG calculates current balances from your recorded transactions. Historical records remain available when an account is archived.
-
-## History and Insights
-History lets you search and filter your journal. Insights summarizes income, spending, categories, account balances and trends so you can understand your habits without turning the app into accounting software.
-
-## Daily reminder
-Enable the daily reminder in Settings and choose the time you prefer. Notification delivery depends on browser/OS support, so the reminder is best treated as a gentle nudge rather than a guaranteed native alarm.
-
-## Updates
-When a newer MONEYLOG release is published, the app can notify you with **Update now** or **Remind me later**. Choosing the latter does not block future updates.
+**Settings** contains account management, categories, recurring entries, savings goals, reminders, appearance, backup and restore, password changes and update checks.
 
 ## Privacy
-MONEYLOG does not require an online account and does not upload your financial records to a server. The local vault is encrypted before it is stored by the app. Backups are also encrypted.
 
-## Made with ♥ by nashihab
-MONEYLOG is a small independent project focused on simple, private financial journaling.
+Financial records are stored locally in the MONEYLOG vault. There is no banking connection, payment processing, cloud database, advertising SDK, analytics service or financial-data upload.
+
+MONEYLOG uses browser cryptography for the local vault and encrypted backup files. This protects the stored data from ordinary casual access, but it does not make a compromised device or a cleared browser profile recoverable.
+
+## Password recovery
+
+The recovery code is the local password-reset method. Keep it somewhere safe. There is no email-based or server-side account recovery because MONEYLOG is intentionally local-only.
+
+## Daily reminders
+
+Daily reminders can be enabled in Settings and assigned a time. Notification delivery depends on the browser and operating system. When background scheduling is unavailable, MONEYLOG also checks when the app is opened or brought back to the foreground.
+
+## Updates
+
+When a newer MONEYLOG release is published, the app checks the public version file while online. A release prompt offers **Update now** or **Remind me later**. Installed users are not shown the first-use install prompt again.
+
+## Backup and restore
+
+Export creates a password-protected `.moneylog` file. Restore verifies the file and password before replacing the current local vault. Keep at least one backup outside the browser profile.
+
+## About
+
+MONEYLOG - Personal Money Journal
+
+Made with ♥ by nashihab
+
+Developer: https://nashihab.github.io
