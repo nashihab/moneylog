@@ -1,1 +1,11 @@
-{"name":"MONEYLOG — Personal Money Journal","short_name":"MONEYLOG","start_url":"./","display":"standalone","background_color":"#f4f6f2","theme_color":"#122a24","description":"Your money. Your record. Your control.","icons":[{"src":"icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}]}
+{
+  "name":"MONEYLOG — Personal Money Journal",
+  "short_name":"MONEYLOG",
+  "start_url":"./",
+  "scope":"./",
+  "display":"standalone",
+  "background_color":"#f4f6f2",
+  "theme_color":"#0d211b",
+  "description":"Your money. Your record. Your control.",
+  "icons":[{"src":"icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}]
+}
