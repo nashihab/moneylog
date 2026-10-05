@@ -1,5 +1,5 @@
 /* MONEYLOG PWA — local-first encrypted personal finance journal */
-const APP_VERSION = '2.0.0';
+const APP_VERSION = '2.1.0';
 const UPDATE_MANIFEST_URL = './version.json';
 const DB_NAME = 'moneylog-secure-v2';
 const DB_VERSION = 1;
@@ -112,7 +112,7 @@ function bytesToB64(bytes){let s='';const chunk=0x8000;for(let i=0;i<bytes.lengt
 function b64ToBytes(b64){const bin=atob(b64);const arr=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)arr[i]=bin.charCodeAt(i);return arr;}
 async function deriveKey(password,salt){
   const base=await crypto.subtle.importKey('raw',new TextEncoder().encode(password),'PBKDF2',false,['deriveKey']);
-  return crypto.subtle.deriveKey({name:'PBKDF2',salt,iterations:PBKDF2_ITERATIONS,hash:'SHA-256'},base,{name:'AES-GCM',length:256},false,['encrypt','decrypt']);
+  return crypto.subtle.deriveKey({name:'PBKDF2',salt,iterations:PBKDF2_ITERATIONS,hash:'SHA-256'},base,{name:'AES-GCM',length:256},true,['encrypt','decrypt']);
 }
 async function encryptText(text,key){
   const iv=crypto.getRandomValues(new Uint8Array(12));
@@ -123,6 +123,46 @@ async function decryptText(payload,key){
   const plain=await crypto.subtle.decrypt({name:'AES-GCM',iv:b64ToBytes(payload.iv)},key,b64ToBytes(payload.data));
   return new TextDecoder().decode(plain);
 }
+async function exportKeyRaw(key){return new Uint8Array(await crypto.subtle.exportKey('raw',key));}
+async function importKeyRaw(bytes){return crypto.subtle.importKey('raw',bytes,{name:'AES-GCM'},false,['encrypt','decrypt']);}
+async function createRecoveryProfile(username,recoveryCode,key=sessionKey){
+  const u=username.trim(); const c=recoveryCode.trim();
+  if(u.length<2) throw new Error('RECOVERY_USERNAME');
+  if(c.length<8) throw new Error('RECOVERY_CODE');
+  const salt=crypto.getRandomValues(new Uint8Array(16));
+  const recoveryKey=await deriveKey(c,salt);
+  const wrapped=await encryptText(bytesToB64(await exportKeyRaw(key)),recoveryKey);
+  await idbPut('meta',{key:'recovery',username:u,salt:bytesToB64(salt),wrapped});
+}
+async function recoverPassword(username,recoveryCode,newPassword){
+  const meta=await idbGet('meta','security');
+  const recovery=await idbGet('meta','recovery');
+  if(!meta||!recovery) throw new Error('NO_RECOVERY');
+  if(username.trim().toLowerCase()!==String(recovery.username).trim().toLowerCase()) throw new Error('WRONG_RECOVERY');
+  const recoveryKey=await deriveKey(recoveryCode.trim(),b64ToBytes(recovery.salt));
+  const raw=await decryptText(recovery.wrapped,recoveryKey);
+  const recoveredKey=await importKeyRaw(b64ToBytes(raw));
+  const vault=await idbGet('vault','main');
+  const nextState=vault?validateState(JSON.parse(await decryptText(vault,recoveredKey))):defaultState();
+  const salt=crypto.getRandomValues(new Uint8Array(16));
+  const newKey=await deriveKey(newPassword,salt);
+  const check=await encryptText('MONEYLOG-PASSWORD-CHECK-v3',newKey);
+  const newRecoveryKey=await deriveKey(recoveryCode.trim(),b64ToBytes(recovery.salt));
+  const newWrapped=await encryptText(bytesToB64(await exportKeyRaw(newKey)),newRecoveryKey);
+  await idbPut('meta',{key:'security',salt:bytesToB64(salt),check});
+  await idbPut('meta',{key:'recovery',username:recovery.username,salt:recovery.salt,wrapped:newWrapped});
+  sessionKey=newKey; state=nextState; await saveVault(); await syncPublicPrefs();
+}
+async function ensureRecoveryProfile(){
+  const existing=await idbGet('meta','recovery');
+  if(existing){if(state&&!state.settings.username){state.settings.username=existing.username;await saveVault();}return;}
+  await new Promise(resolve=>{
+    modal('Secure your recovery',`<p class="muted">MONEYLOG now uses a username + password + recovery code. Your username is only stored on this device; it is not an online account.</p><form id="recovery-setup-form"><div class="field"><label>Username</label><input id="recovery-username" class="input" minlength="2" maxlength="40" required placeholder="Your local username"></div><div class="field" style="margin-top:12px"><label>Recovery code</label><input id="recovery-code" class="input" minlength="8" maxlength="64" required placeholder="Create a code you will remember"></div><div class="install-hint" style="margin-top:12px"><strong>Save this recovery code somewhere safe.</strong><br>It is the only supported way to reset your MONEYLOG password. MONEYLOG cannot email or retrieve it for you.</div><div class="modal-actions"><button type="submit" class="btn btn-primary">Save recovery method</button></div></form>`,{wide:false});
+    const form=$('#recovery-setup-form'); if(!form){resolve();return;}
+    form.addEventListener('submit',async e=>{e.preventDefault();try{await createRecoveryProfile($('#recovery-username').value,$('#recovery-code').value);state.settings.username=$('#recovery-username').value.trim();await saveVault();closeModal();resolve();showToast('Recovery method saved.');}catch(err){showToast(err.message==='RECOVERY_USERNAME'?'Enter a username.':'Use a recovery code of at least 8 characters.');}});
+  });
+}
+
 async function createPassword(password){
   const salt=crypto.getRandomValues(new Uint8Array(16));
   const key=await deriveKey(password,salt);
@@ -135,7 +175,7 @@ async function unlockPassword(password){
   if(!meta) throw new Error('NO_PASSWORD');
   const key=await deriveKey(password,b64ToBytes(meta.salt));
   const check=await decryptText(meta.check,key);
-  if(check!=='MONEYLOG-PASSWORD-CHECK-v2') throw new Error('WRONG_PASSWORD');
+  if(check!=='MONEYLOG-PASSWORD-CHECK-v2' && check!=='MONEYLOG-PASSWORD-CHECK-v3') throw new Error('WRONG_PASSWORD');
   const vault=await idbGet('vault','main');
   if(vault){ const raw=await decryptText(vault,key); state=validateState(JSON.parse(raw)); }
   else state=defaultState();
@@ -159,21 +199,40 @@ function defaultState(){
     budgets:{overallMinor:0,category:{}},
     goals:[],
     recurring:[],
-    settings:{currency:'BDT',theme:'system',hideAmounts:false,defaultAccountId:null,reminderEnabled:false,reminderTime:'20:30',autoLock:'15',lastReminderDate:'',lastBackupAt:'',firstDayTip:true}
+    settings:{currency:'BDT',theme:'system',hideAmounts:false,defaultAccountId:null,reminderEnabled:false,reminderTime:'20:30',autoLock:'15',lastReminderDate:'',lastBackupAt:'',firstDayTip:true,installChoice:'',durableBackupName:'moneylog-vault.moneylog'}
   };
 }
+function normalizeAccounts(accounts,transactions,settings){
+  const list=Array.isArray(accounts)?accounts.map(a=>({...a,id:a.id||uuid(),name:String(a.name||'').trim()||'Account',openingMinor:Number(a.openingMinor||0)})):[];
+  const removed=new Set();
+  for(let i=0;i<list.length;i++){
+    const a=list[i]; if(removed.has(a.id)) continue;
+    for(let j=i+1;j<list.length;j++){
+      const b=list[j]; if(removed.has(b.id)) continue;
+      if(a.name.toLowerCase()==='cash' && b.name.toLowerCase()==='cash' && a.type===b.type && Number(b.openingMinor||0)===0 && !(transactions||[]).some(t=>t.accountId===b.id||t.toAccountId===b.id)){removed.add(b.id);}
+    }
+  }
+  const filtered=list.filter(a=>!removed.has(a.id));
+  for(const t of transactions||[]){if(removed.has(t.accountId))t.accountId=filtered.find(a=>a.name.toLowerCase()==='cash')?.id||filtered[0]?.id||'';if(removed.has(t.toAccountId))t.toAccountId=filtered.find(a=>a.name.toLowerCase()==='cash')?.id||filtered[0]?.id||'';}
+  if(settings&&removed.has(settings.defaultAccountId))settings.defaultAccountId=filtered.find(a=>!a.archived)?.id||filtered[0]?.id||null;
+  return filtered.length?filtered:[{id:uuid(),name:'Cash',type:'Cash',openingMinor:0,description:'',archived:false}];
+}
+
 function validateState(s){
   const d=defaultState();
   s=s&&typeof s==='object'?s:{};
+  const transactions=Array.isArray(s.transactions)?s.transactions.map(t=>({...t,id:t.id||uuid(),amountMinor:Number(t.amountMinor||0)})):[];
+  const settings={...d.settings,...(s.settings||{})};
+  const accounts=normalizeAccounts(s.accounts,transactions,settings);
   return {
     version:2,
-    accounts:Array.isArray(s.accounts)?s.accounts.map(a=>({...a,id:a.id||uuid(),openingMinor:Number(a.openingMinor||0)})):d.accounts,
-    transactions:Array.isArray(s.transactions)?s.transactions.map(t=>({...t,id:t.id||uuid(),amountMinor:Number(t.amountMinor||0)})):[],
+    accounts,
+    transactions,
     categories:{expense:Array.isArray(s.categories?.expense)?s.categories.expense:d.categories.expense,income:Array.isArray(s.categories?.income)?s.categories.income:d.categories.income},
     budgets:{overallMinor:Number(s.budgets?.overallMinor||0),category:s.budgets?.category||{}},
     goals:Array.isArray(s.goals)?s.goals:[],
     recurring:Array.isArray(s.recurring)?s.recurring:[],
-    settings:{...d.settings,...(s.settings||{})}
+    settings
   };
 }
 
@@ -181,13 +240,17 @@ async function setupPassword(){
   renderAuth('setup');
   $('#setup-form').addEventListener('submit',async e=>{
     e.preventDefault();
-    const p=$('#setup-password').value, c=$('#setup-confirm').value;
-    if(p.length<8) return showToast('Use at least 8 characters.');
-    if(p!==c) return showToast('The passwords do not match.');
-    try{ await createPassword(p); state=defaultState(); state.settings.defaultAccountId=state.accounts[0].id; await saveVault(); await finishUnlock(); showToast('MONEYLOG is ready.'); }
+    const username=$('#setup-username').value.trim(),p=$('#setup-password').value,c=$('#setup-confirm').value,recovery=$('#setup-recovery').value.trim(),recoveryConfirm=$('#setup-recovery-confirm').value.trim();
+    if(username.length<2)return showToast('Enter a username.');
+    if(p.length<8)return showToast('Use at least 8 characters for your password.');
+    if(p!==c)return showToast('The passwords do not match.');
+    if(recovery.length<8)return showToast('Use at least 8 characters for your recovery code.');
+    if(recovery!==recoveryConfirm)return showToast('The recovery codes do not match.');
+    try{ await createPassword(p); state=defaultState(); state.settings.defaultAccountId=state.accounts[0].id; state.settings.username=username; await createRecoveryProfile(username,recovery); await saveVault(); await finishUnlock(); showToast('MONEYLOG is ready.'); }
     catch(err){console.error(err);showToast('Could not create the secure vault.');}
   });
 }
+
 async function login(){
   renderAuth('login');
   $('#login-form').addEventListener('submit',async e=>{
@@ -196,11 +259,18 @@ async function login(){
     catch(err){const msg=err?.message==='WRONG_PASSWORD'?'That password is not correct.':'Could not open your vault.';showToast(msg);$('#login-password').select();}
   });
 }
+function recoveryPasswordForm(){
+  modal('Recover your MONEYLOG',`<p class="muted">Use the username and recovery code you created on first setup. This works only on this device because MONEYLOG has no online account system.</p><form id="recover-form"><div class="field"><label>Username</label><input id="recover-username" class="input" required></div><div class="field" style="margin-top:12px"><label>Recovery code</label><input id="recover-code" class="input" required></div><div class="field" style="margin-top:12px"><label>New password</label><input id="recover-new" class="input" type="password" minlength="8" required></div><div class="field" style="margin-top:12px"><label>Confirm new password</label><input id="recover-confirm" class="input" type="password" minlength="8" required></div><div class="install-hint" style="margin-top:12px">Your recovery code is not stored in plain text. Keep it somewhere safe after this reset.</div><div class="modal-actions"><button type="button" class="btn btn-ghost" data-action="close-modal">Cancel</button><button class="btn btn-primary">Reset password</button></div></form>`);
+  $('#recover-form').addEventListener('submit',async e=>{e.preventDefault();const n=$('#recover-new').value,c=$('#recover-confirm').value;if(n.length<8||n!==c)return showToast('Check the new password.');try{await recoverPassword($('#recover-username').value,$('#recover-code').value,n);closeModal();await finishUnlock();showToast('Password reset successfully.');}catch(err){showToast(err.message==='NO_RECOVERY'?'No recovery method is configured for this vault.':'The username or recovery code is not correct.');}});
+}
+
 async function finishUnlock(){
   applyTheme();
   resetAutoLockTimer();
+  await ensureRecoveryProfile();
   await checkForUpdate(true);
   renderApp();
+  maybeShowInstallChoice();
 }
 function lockApp(silent=false){
   sessionKey=null; state=null; clearTimeout(autoLockTimer); renderAuth('login'); if(!silent)showToast('MONEYLOG locked.');
@@ -235,7 +305,7 @@ function appShell(content){
       <div class="sidebar-spacer"></div><div class="side-card"><strong>${state.accounts.filter(a=>!a.archived).length} active accounts</strong><small>Your records stay on this device.</small></div><button class="btn btn-ghost" data-action="lock">${ICONS.lock} Lock MONEYLOG</button></aside>
     <main class="main"><div class="content">${update}${content}</div></main>
     <nav class="mobile-nav">${navItem('home','Home',ICONS.home)}${navItem('history','History',ICONS.history)}${navItem('insights','Insights',ICONS.insights)}${navItem('settings','Settings',ICONS.settings)}<button data-action="lock">${ICONS.lock}<span>Lock</span></button></nav>
-  </div>${currentTab!=='settings'?`<button class="fab" data-action="add">${ICONS.plus}</button>`:''}`;
+  </div><footer class="app-footer">Made with <span>♥</span> by nashihab</footer>${currentTab!=='settings'?`<button class="fab" data-action="add">${ICONS.plus}</button>`:''}`;
 }
 function renderApp(){
   if(!state||!sessionKey){renderAuth('login');return;}
@@ -250,9 +320,10 @@ function renderApp(){
 function renderAuth(mode){
   document.documentElement.dataset.theme='light';
   if(mode==='setup'){
-    $('#app').innerHTML=`<div class="auth"><div class="auth-card"><div class="auth-brand"><div class="brand-name">MONEY<span>LOG</span></div><div class="brand-tag">PERSONAL MONEY JOURNAL</div></div><h1 class="auth-title">Create your private vault.</h1><p class="auth-copy">Everything you record is encrypted before it is stored on this device. There is no account and no cloud database.</p><form id="setup-form"><div class="field"><label>Create password</label><div class="password-wrap"><input id="setup-password" class="input" type="password" minlength="8" autocomplete="new-password" required placeholder="At least 8 characters"><button class="reveal" type="button" data-action="toggle-pass" data-target="setup-password">◉</button></div></div><div class="field"><label>Confirm password</label><input id="setup-confirm" class="input" type="password" minlength="8" autocomplete="new-password" required placeholder="Enter it again"></div><div class="install-hint">Your password is not stored. Losing it means the encrypted vault cannot be opened.</div><button class="btn btn-primary" style="width:100%;margin-top:14px">Create MONEYLOG</button></form></div></div>`;
+    $('#app').innerHTML=`<div class="auth"><div class="auth-card glass"><div class="auth-brand"><div class="brand-name">MONEY<span>LOG</span></div><div class="brand-tag">PERSONAL MONEY JOURNAL</div></div><h1 class="auth-title">Create your private MONEYLOG.</h1><p class="auth-copy">Set a local username, password, and recovery code. Nothing is sent to a server.</p><form id="setup-form"><div class="field"><label>Username</label><input id="setup-username" class="input" minlength="2" maxlength="40" autocomplete="username" required placeholder="Choose a local username"></div><div class="field" style="margin-top:12px"><label>Password</label><div class="password-wrap"><input id="setup-password" class="input" type="password" minlength="8" autocomplete="new-password" required placeholder="At least 8 characters"><button class="reveal" type="button" data-action="toggle-pass" data-target="setup-password">◉</button></div></div><div class="field" style="margin-top:12px"><label>Confirm password</label><input id="setup-confirm" class="input" type="password" minlength="8" autocomplete="new-password" required placeholder="Enter it again"></div><div class="field" style="margin-top:12px"><label>Recovery code</label><input id="setup-recovery" class="input" minlength="8" maxlength="64" required placeholder="Create a recovery code"></div><div class="field" style="margin-top:12px"><label>Confirm recovery code</label><input id="setup-recovery-confirm" class="input" minlength="8" maxlength="64" required placeholder="Enter it again"></div><div class="install-hint" style="margin-top:14px"><strong>Do not lose the recovery code.</strong><br>MONEYLOG cannot email it or recover it for you. It is your password-reset method.</div><button class="btn btn-primary" style="width:100%;margin-top:14px">Create MONEYLOG</button></form><div class="auth-footer">Made with <span>♥</span> by nashihab</div></div></div>`;
   } else {
-    $('#app').innerHTML=`<div class="auth"><div class="auth-card"><div class="auth-brand"><div class="brand-name">MONEY<span>LOG</span></div><div class="brand-tag">PERSONAL MONEY JOURNAL</div></div><h1 class="auth-title">Welcome back.</h1><p class="auth-copy">Unlock your local vault to continue.</p><form id="login-form"><div class="field"><label>Password</label><div class="password-wrap"><input id="login-password" class="input" type="password" autocomplete="current-password" autofocus required placeholder="Your MONEYLOG password"><button class="reveal" type="button" data-action="toggle-pass" data-target="login-password">◉</button></div></div><button class="btn btn-primary" style="width:100%;margin-top:5px">Unlock MONEYLOG</button></form><div class="install-hint" style="margin-top:14px">Locked automatically after your selected idle period. You can also lock it anytime.</div></div></div>`;
+    $('#app').innerHTML=`<div class="auth"><div class="auth-card glass"><div class="auth-brand"><div class="brand-name">MONEY<span>LOG</span></div><div class="brand-tag">PERSONAL MONEY JOURNAL</div></div><h1 class="auth-title">Welcome back.</h1><p class="auth-copy">Enter your username and password to unlock your private vault.</p><form id="login-form"><div class="field"><label>Username</label><input id="login-username" class="input" autocomplete="username" required placeholder="Your MONEYLOG username"></div><div class="field" style="margin-top:12px"><label>Password</label><div class="password-wrap"><input id="login-password" class="input" type="password" autocomplete="current-password" required placeholder="Your MONEYLOG password"><button class="reveal" type="button" data-action="toggle-pass" data-target="login-password">◉</button></div></div><button class="btn btn-primary" style="width:100%;margin-top:14px">Unlock MONEYLOG</button></form><button class="btn btn-ghost" style="width:100%;margin-top:8px" data-action="forgot-password">Forgot password? Use recovery code</button><div class="install-hint" style="margin-top:14px">Your financial data stays on this device. Use the installed web app for the safest storage experience.</div><div class="auth-footer">Made with <span>♥</span> by nashihab</div></div></div>`;
+    $('#login-form').addEventListener('submit',async e=>{e.preventDefault();try{const entered=$('#login-username').value.trim();const recoveryMeta=await idbGet('meta','recovery');if(recoveryMeta&&entered.toLowerCase()!==String(recoveryMeta.username).toLowerCase())throw new Error('WRONG_USER');await unlockPassword($('#login-password').value);await finishUnlock();}catch(err){const msg=err?.message==='WRONG_USER'?'That username is not correct.':err?.message==='WRONG_PASSWORD'?'That password is not correct.':'Could not open your vault.';showToast(msg);$('#login-password').select();}});
   }
 }
 
@@ -335,7 +406,7 @@ function settingsView(){
   return `<div class="topbar"><div><div class="kicker">YOUR CONTROL CENTER</div><h1 class="page-title">Settings</h1></div><div class="top-actions"><button class="btn btn-danger" data-action="lock">${ICONS.lock} Lock now</button></div></div>
   <div class="grid grid-2"><div class="card"><div class="section-head"><div><h2>Privacy & security</h2><span class="mini">Local-only controls</span></div><span class="pill">${ICONS.shield} Private</span></div><div class="setting-list"><div class="setting"><div><div class="setting-title">Hide amounts</div><div class="setting-desc">Mask monetary values on the dashboard.</div></div><label class="switch"><input id="setting-hide" type="checkbox" ${s.hideAmounts?'checked':''}><span class="slider"></span></label></div><div class="setting"><div><div class="setting-title">Auto-lock</div><div class="setting-desc">Lock after inactivity.</div></div><select class="select" id="setting-autolock" style="width:auto"><option value="5" ${s.autoLock==='5'?'selected':''}>5 min</option><option value="15" ${s.autoLock==='15'?'selected':''}>15 min</option><option value="30" ${s.autoLock==='30'?'selected':''}>30 min</option><option value="0" ${s.autoLock==='0'?'selected':''}>Never</option></select></div><div class="setting"><div><div class="setting-title">Change password</div><div class="setting-desc">Re-encrypt the vault with a new password.</div></div><button class="btn btn-soft" data-action="change-password">Change</button></div><div class="setting"><div><div class="setting-title">Lock MONEYLOG</div><div class="setting-desc">Close the current decrypted session.</div></div><button class="btn btn-ghost" data-action="lock">Lock</button></div></div></div>
   <div class="card"><div class="section-head"><div><h2>Daily journal reminder</h2><span class="mini">A gentle nudge to record today's money.</span></div><span class="pill">${ICONS.bell} Reminder</span></div><div class="setting"><div><div class="setting-title">Daily reminder</div><div class="setting-desc">Notifications are optional and controlled by your device.</div></div><label class="switch"><input id="setting-reminder" type="checkbox" ${s.reminderEnabled?'checked':''}><span class="slider"></span></label></div><div class="form-grid two"><div class="field"><label>Reminder time</label><input id="setting-reminder-time" class="input" type="time" value="${esc(s.reminderTime)}"></div><div class="field"><label>Status</label><div class="install-hint" id="reminder-status">${esc(reminderStatusText())}</div></div></div><div class="mini" style="margin-top:10px">Best-effort background delivery depends on browser support. When background scheduling is unavailable, MONEYLOG also checks while the app is active.</div></div></div>
-  <div class="card section"><div class="section-head"><div><h2>Appearance</h2><span class="mini">Comfortable in light or dark environments.</span></div></div><div class="choice-row">${['system','light','dark'].map(x=>`<button class="choice ${s.theme===x?'active':''}" data-action="theme" data-theme="${x}">${x==='system'?'System':x==='light'?ICONS.sun+' Light':ICONS.moon+' Dark'}</button>`).join('')}</div></div>
+  <div class="card section"><div class="section-head"><div><h2>Local profile</h2><span class="mini">Stored only on this device.</span></div><span class="pill">${esc(state.settings.username||'Local user')}</span></div><p class="muted">Your username is used to verify the correct vault during sign-in and password recovery. It is not an online account.</p></div><div class="card section"><div class="section-head"><div><h2>Appearance</h2><span class="mini">Comfortable in light or dark environments.</span></div></div><div class="choice-row">${['system','light','dark'].map(x=>`<button class="choice ${s.theme===x?'active':''}" data-action="theme" data-theme="${x}">${x==='system'?'System':x==='light'?ICONS.sun+' Light':ICONS.moon+' Dark'}</button>`).join('')}</div></div>
   <div class="card section"><div class="section-head"><div><h2>Money format</h2><span class="mini">One base currency throughout the app.</span></div></div><div class="form-grid two"><div class="field"><label>Currency</label><select id="setting-currency" class="select">${Object.entries(CURRENCIES).map(([k,v])=>`<option value="${k}" ${s.currency===k?'selected':''}>${esc(k)} · ${esc(v)}</option>`).join('')}</select></div><div class="field"><label>Backup</label><button class="btn btn-soft" data-action="export-backup">Export encrypted backup</button></div></div><div class="form-grid two" style="margin-top:12px"><div class="field"><label>Restore</label><input id="restore-file" class="input" type="file" accept=".moneylog,application/octet-stream"></div><div class="field"><label>Install</label><button class="btn btn-ghost" data-action="install">Add MONEYLOG to home screen</button></div></div></div>
   <div class="grid grid-2 section"><div class="card"><div class="section-head"><div><h2>Accounts</h2><span class="mini">Cash, bank, savings and more.</span></div><button class="btn btn-primary" data-action="add-account">Add</button></div><div class="list">${state.accounts.map(a=>`<div class="list-row"><span class="avatar">${ICONS.wallet}</span><span class="grow"><strong>${esc(a.name)}</strong><small>${esc(a.type)}${a.archived?' · Archived':''}</small></span><strong class="money">${esc(formatMoney(balanceForAccount(a.id)))}</strong><button class="btn btn-ghost btn-icon" data-action="edit-account" data-id="${esc(a.id)}">${ICONS.edit}</button></div>`).join('')}</div></div>
   <div class="card"><div class="section-head"><div><h2>Budget</h2><span class="mini">Optional monthly spending limit.</span></div></div><div class="field"><label>Overall monthly budget</label><input id="budget-input" class="input" type="number" min="0" step="0.01" value="${state.budgets.overallMinor/100}"></div><button class="btn btn-primary" data-action="save-budget" style="margin-top:10px">Save budget</button></div></div>
@@ -343,7 +414,7 @@ function settingsView(){
   <div class="card"><div class="section-head"><div><h2>Recurring entries</h2><span class="mini">Generated safely when MONEYLOG is opened.</span></div><button class="btn btn-soft" data-action="add-recurring">Add</button></div>${recurringDue.length?`<div class="list">${recurringDue.map(r=>`<div class="list-row"><span class="avatar">${ICONS.repeat}</span><span class="grow"><strong>${esc(r.name||r.categoryName||'Recurring')}</strong><small>${esc(r.frequency)} · next ${esc(r.nextDate)}</small></span><span class="money ${r.type==='income'?'positive':'negative'}">${esc(signedMoney(r.amountMinor,r.type))}</span><button class="btn btn-ghost btn-icon" data-action="edit-recurring" data-id="${esc(r.id)}">${ICONS.edit}</button></div>`).join('')}</div>`:`<div class="empty">No recurring entries yet.</div>`}</div></div>
   <div class="card section"><div class="section-head"><div><h2>Savings goals</h2><span class="mini">Planning progress; contributions do not move account balances automatically.</span></div><button class="btn btn-soft" data-action="add-goal">Add goal</button></div>${state.goals.length?`<div class="goal-grid">${state.goals.map(g=>goalCard(g)).join('')}</div>`:`<div class="empty">Create a goal such as “Emergency fund” or “New laptop”.</div>`}</div>
   <div class="card section"><div class="section-head"><div><h2>App updates</h2><span class="mini">MONEYLOG checks its published version when online.</span></div><span class="pill">v${APP_VERSION}</span></div><div class="row" style="justify-content:space-between"><span class="muted">${updateInfo?`New version ${esc(updateInfo.version)} is available.`:'You are up to date.'}</span><button class="btn btn-soft" data-action="check-update">Check now</button></div></div>
-  <div class="card section" style="border-color:color-mix(in srgb,var(--expense) 22%,var(--line))"><div class="section-head"><div><h2>Danger zone</h2><span class="mini">These actions are destructive.</span></div></div><div class="row" style="justify-content:space-between;gap:10px;flex-wrap:wrap"><span class="muted">Delete every MONEYLOG record stored on this device.</span><button class="btn btn-danger" data-action="wipe-data">Delete all data</button></div></div>`;
+  <div class="card section" style="border-color:color-mix(in srgb,var(--expense) 22%,var(--line))"><div class="section-head"><div><h2>Danger zone</h2><span class="mini">These actions are destructive.</span></div></div><div class="row" style="justify-content:space-between;gap:10px;flex-wrap:wrap"><span class="muted">Delete the local vault only when you intentionally want to start over. Browser cache/site-data cleanup can also remove local browser storage; use the .moneylog file for durable backup.</span><button class="btn btn-danger" data-action="wipe-data">Delete all data</button></div></div>`;
 }
 function greeting(){const h=new Date().getHours();return h<5?'LATE NIGHT':h<12?'GOOD MORNING':h<18?'GOOD AFTERNOON':'GOOD EVENING';}
 function reminderStatusText(){
@@ -471,18 +542,28 @@ async function processRecurring(){
 }
 
 async function changePassword(){
-  modal('Change MONEYLOG password',`<form id="pw-form"><div class="field"><label>Current password</label><input id="pw-old" class="input" type="password" required autocomplete="current-password"></div><div class="field" style="margin-top:12px"><label>New password</label><input id="pw-new" class="input" type="password" minlength="8" required autocomplete="new-password"></div><div class="field" style="margin-top:12px"><label>Confirm new password</label><input id="pw-confirm" class="input" type="password" minlength="8" required autocomplete="new-password"></div><div class="install-hint" style="margin-top:12px">Your current vault will be decrypted in memory and immediately re-encrypted with the new password.</div><div class="modal-actions"><button type="button" class="btn btn-ghost" data-action="close-modal">Cancel</button><button class="btn btn-primary">Change password</button></div></form>`);
-  $('#pw-form').addEventListener('submit',async e=>{e.preventDefault();const old=$('#pw-old').value,n=$('#pw-new').value,c=$('#pw-confirm').value;if(n.length<8||n!==c)return showToast('Check the new password.');try{const meta=await idbGet('meta','security');const oldKey=await deriveKey(old,b64ToBytes(meta.salt));if(await decryptText(meta.check,oldKey)!=='MONEYLOG-PASSWORD-CHECK-v2')throw new Error('WRONG');const salt=crypto.getRandomValues(new Uint8Array(16));const key=await deriveKey(n,salt);const check=await encryptText('MONEYLOG-PASSWORD-CHECK-v2',key);sessionKey=key;await idbPut('meta',{key:'security',salt:bytesToB64(salt),check});await saveVault();closeModal();showToast('Password changed.');}catch{showToast('Current password is not correct.');}});
+  modal('Change MONEYLOG password',`<form id="pw-form"><div class="field"><label>Current password</label><input id="pw-old" class="input" type="password" required autocomplete="current-password"></div><div class="field" style="margin-top:12px"><label>New password</label><input id="pw-new" class="input" type="password" minlength="8" required autocomplete="new-password"></div><div class="field" style="margin-top:12px"><label>Confirm new password</label><input id="pw-confirm" class="input" type="password" minlength="8" required autocomplete="new-password"></div><div class="field" style="margin-top:12px"><label>Recovery code</label><input id="pw-recovery" class="input" required placeholder="Required to keep password recovery working"></div><div class="install-hint" style="margin-top:12px">Your recovery code is used to wrap the new password key. It is not stored in plain text.</div><div class="modal-actions"><button type="button" class="btn btn-ghost" data-action="close-modal">Cancel</button><button class="btn btn-primary">Change password</button></div></form>`);
+  $('#pw-form').addEventListener('submit',async e=>{e.preventDefault();const old=$('#pw-old').value,n=$('#pw-new').value,c=$('#pw-confirm').value,rcode=$('#pw-recovery').value.trim();if(n.length<8||n!==c)return showToast('Check the new password.');try{const meta=await idbGet('meta','security'),recovery=await idbGet('meta','recovery');const oldKey=await deriveKey(old,b64ToBytes(meta.salt));const check=await decryptText(meta.check,oldKey);if(!['MONEYLOG-PASSWORD-CHECK-v2','MONEYLOG-PASSWORD-CHECK-v3'].includes(check))throw new Error('WRONG');if(!recovery)throw new Error('NO_RECOVERY');const rkey=await deriveKey(rcode,b64ToBytes(recovery.salt));await decryptText(recovery.wrapped,rkey);const salt=crypto.getRandomValues(new Uint8Array(16)),key=await deriveKey(n,salt),newCheck=await encryptText('MONEYLOG-PASSWORD-CHECK-v3',key);const newRKey=await deriveKey(rcode,b64ToBytes(recovery.salt)),wrapped=await encryptText(bytesToB64(await exportKeyRaw(key)),newRKey);sessionKey=key;await idbPut('meta',{key:'security',salt:bytesToB64(salt),check:newCheck});await idbPut('meta',{key:'recovery',username:recovery.username,salt:recovery.salt,wrapped});await saveVault();closeModal();showToast('Password changed.');}catch(err){showToast(err.message==='NO_RECOVERY'?'Set up a recovery method first.':'Current password or recovery code is not correct.');}});
 }
 
 async function exportBackup(){
   const p=prompt('Create a password for this backup file (8+ characters).');if(!p)return;if(p.length<8)return showToast('Use at least 8 characters.');
-  const salt=crypto.getRandomValues(new Uint8Array(16)),key=await deriveKey(p,salt);const payload={format:'moneylog',version:2,exportedAt:new Date().toISOString(),state};const encrypted=await encryptText(JSON.stringify(payload),key);const file={magic:'MONEYLOG',version:2,salt:bytesToB64(salt),...encrypted};const blob=new Blob([JSON.stringify(file)],{type:'application/octet-stream'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`moneylog-${todayISO()}.moneylog`;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);state.settings.lastBackupAt=new Date().toISOString();await saveVault();showToast('Encrypted backup exported.');
+  const salt=crypto.getRandomValues(new Uint8Array(16)),key=await deriveKey(p,salt);const payload={format:'moneylog',version:3,exportedAt:new Date().toISOString(),state};const encrypted=await encryptText(JSON.stringify(payload),key);const file={magic:'MONEYLOG',version:3,salt:bytesToB64(salt),...encrypted};const blob=new Blob([JSON.stringify(file)],{type:'application/octet-stream'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`moneylog-${todayISO()}.moneylog`;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);state.settings.lastBackupAt=new Date().toISOString();await saveVault();showToast('Encrypted backup exported.');
 }
 async function restoreBackup(file){
-  if(!file)return;try{const raw=JSON.parse(await file.text());if(raw.magic!=='MONEYLOG'||raw.version!==2)throw new Error('unsupported');const p=prompt('Enter the backup password.');if(!p)return;const key=await deriveKey(p,b64ToBytes(raw.salt));const data=JSON.parse(await decryptText(raw,key));if(!data.state)throw new Error('invalid');if(!confirm('Replace all current MONEYLOG data with this backup? This cannot be undone.'))return;state=validateState(data.state);await saveVault();renderApp();showToast('Backup restored.');}catch{showToast('Could not restore this backup. Check the password or file.');}}
+  if(!file)return;try{const raw=JSON.parse(await file.text());if(raw.magic!=='MONEYLOG'||raw.version!==2)throw new Error('unsupported');const p=prompt('Enter the backup password.');if(!p)return;const key=await deriveKey(p,b64ToBytes(raw.salt));if(![2,3].includes(raw.version))throw new Error('unsupported');const data=JSON.parse(await decryptText(raw,key));if(!data.state)throw new Error('invalid');if(!confirm('Replace all current MONEYLOG data with this backup? This cannot be undone.'))return;state=validateState(data.state);await saveVault();renderApp();showToast('Backup restored.');}catch{showToast('Could not restore this backup. Check the password or file.');}}
 function exportCSV(){const rows=[['Date','Type','Category','Account','To account','Amount','Note'],...filteredTransactions().map(t=>[t.date,t.type,t.type==='transfer'?'Transfer':categoryName(t.type,t.categoryId),accountName(t.accountId),accountName(t.toAccountId),(t.type==='expense'?-1:t.type==='income'?1:1)*(t.amountMinor/100),t.note||''])];const csv=rows.map(r=>r.map(x=>`"${String(x).replace(/"/g,'""')}"`).join(',')).join('\n');const blob=new Blob([csv],{type:'text/csv'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`moneylog-${todayISO()}.csv`;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);}
 
+async function saveDurableBackup(){
+  const p=prompt('Create a password for this durable .moneylog file (8+ characters).');if(!p)return;if(p.length<8)return showToast('Use at least 8 characters.');
+  const salt=crypto.getRandomValues(new Uint8Array(16)),key=await deriveKey(p,salt),payload={format:'moneylog',version:3,exportedAt:new Date().toISOString(),state};const encrypted=await encryptText(JSON.stringify(payload),key);const bytes=new Blob([JSON.stringify({magic:'MONEYLOG',version:3,salt:bytesToB64(salt),...encrypted})],{type:'application/octet-stream'});
+  if(window.showSaveFilePicker){try{const handle=await window.showSaveFilePicker({suggestedName:'moneylog-vault.moneylog',types:[{description:'MONEYLOG encrypted vault',accept:{'application/octet-stream':['.moneylog']}}]});const writable=await handle.createWritable();await writable.write(bytes);await writable.close();state.settings.durableBackupName=handle.name||'moneylog-vault.moneylog';await saveVault();showToast('Durable vault file saved.');return;}catch(err){if(err?.name==='AbortError')return;}}
+  const a=document.createElement('a');a.href=URL.createObjectURL(bytes);a.download='moneylog-vault.moneylog';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);showToast('Encrypted vault file downloaded. Keep it safe.');
+}
+function maybeShowInstallChoice(){
+  if(localStorage.getItem('moneylog-entry-choice'))return;
+  setTimeout(()=>{if($('#modal-root').dataset.open)return;modal('How would you like to use MONEYLOG?',`<p class="muted">For the best experience, install MONEYLOG as a web app. The installed version keeps its app shell separate from ordinary browsing.</p><div class="install-choice-grid"><button class="install-option" data-action="install-choice" data-choice="install"><span class="install-option-icon">↓</span><span><strong>Install Web App</strong><small>Best choice for daily use</small></span></button><button class="install-option" data-action="install-choice" data-choice="web"><span class="install-option-icon">↗</span><span><strong>Use Web Version</strong><small>Runs inside your browser</small></span></button></div><div class="web-warning"><strong>Web version warning</strong><br>Browser cleanup, clearing site data, or uninstalling browser data can remove MONEYLOG's local vault. Keep an encrypted <code>.moneylog</code> backup outside the browser.</div>`);},250);
+}
 function toggleInstall(){if(deferredInstallPrompt){deferredInstallPrompt.prompt();deferredInstallPrompt=null;return;}showToast('Open your browser menu and choose “Add to Home screen”.');}
 async function checkForUpdate(force=false){
   try{
@@ -538,6 +619,9 @@ $('#app').addEventListener('click',async e=>{
     else if(action==='export-backup')exportBackup();
     else if(action==='export-csv')exportCSV();
     else if(action==='install')toggleInstall();
+    else if(action==='install-choice'){localStorage.setItem('moneylog-entry-choice',el.dataset.choice);closeModal();if(el.dataset.choice==='install')toggleInstall();}
+    else if(action==='forgot-password')recoveryPasswordForm();
+    else if(action==='save-durable-backup')saveDurableBackup();
     else if(action==='toggle-pass'){const input=$(`#${el.dataset.target}`);input.type=input.type==='password'?'text':'password';}
     else if(action==='save-budget'){const v=Math.max(0,Number($('#budget-input').value));if(!Number.isFinite(v))return showToast('Enter a valid budget.');state.budgets.overallMinor=Math.round(v*100);await saveVault();renderApp();showToast('Budget saved.');}
     else if(action==='theme'){state.settings.theme=el.dataset.theme;await saveVault();applyTheme();renderApp();}
