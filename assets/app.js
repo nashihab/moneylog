@@ -1,5 +1,5 @@
 /* MONEYLOG PWA - local-first encrypted personal finance journal */
-const APP_VERSION = '2.4.0';
+const APP_VERSION = '2.5.1';
 const UPDATE_MANIFEST_URL = './version.json';
 const DB_NAME = 'moneylog-secure-v2';
 const DB_VERSION = 1;
@@ -20,6 +20,7 @@ let db = null;
 let sessionKey = null;
 let state = null;
 let currentTab = 'home';
+let demoMode = new URLSearchParams(location.search).get('demo') === '1';
 let insightsRange = 'thisMonth';
 let historyFilters = { q:'', type:'all', account:'all', category:'all', from:'', to:'' };
 let modalCloseTimer = null;
@@ -387,6 +388,7 @@ function protectedBackupStatusLabel(){
 }
 function storageQualityStrip(){
   const online=navigator.onLine!==false;
+  if(demoMode)return `<div class="quality-strip"><span class="quality-chip quality-installed"><i></i>Demo mode</span><span class="quality-chip"><span class="quality-icon">${ICONS.shield}</span>Nothing is saved</span></div>`;
   const protectedNow=storageProtectionStatus.backup;
   return `<div class="quality-strip"><span class="quality-chip ${online?'is-online':'is-offline'}"><i></i>${online?'Online':'Offline-ready'}</span><span class="quality-chip ${protectedNow?'quality-safe':'quality-risk'}"><span class="quality-icon">${ICONS.shield}</span>${esc(protectedBackupStatusLabel())}</span>${isInstalledWebApp()?'<span class="quality-chip quality-installed">Installed app</span>':''}</div>`;
 }
@@ -421,6 +423,7 @@ function queueProtectedBackup(){
   },650);
 }
 async function enableProtectedBackup(){
+  if(demoMode){openDemoSignup();return;}
   if(!sessionKey||!state)return;
   await requestPersistentStorage();
   if(!window.showSaveFilePicker){
@@ -446,6 +449,7 @@ async function enableProtectedBackup(){
   }catch(err){if(err?.name==='AbortError')return;showToast(err?.message==='WRONG_PASSWORD'?'That password is not correct.':'Could not create the protected file.');}
 }
 async function pickProtectedRestore(){
+  if(demoMode){openDemoSignup();return;}
   try{
     if(window.showOpenFilePicker){
       const [handle]=await window.showOpenFilePicker({multiple:false,types:[{description:'MONEYLOG protected vault',accept:{'application/octet-stream':['.moneylog']}}]});
@@ -458,6 +462,7 @@ async function pickProtectedRestore(){
   }catch(err){if(err?.name!=='AbortError')showToast('Could not open the protected file.');}
 }
 async function connectProtectedFile(){
+  if(demoMode){openDemoSignup();return;}
   if(!sessionKey)return;
   try{
     if(!window.showOpenFilePicker){showToast('Your browser does not support reconnecting a protected file here. Use Protect my data to choose a file again.');return;}
@@ -476,6 +481,7 @@ async function connectProtectedFile(){
   }catch(err){if(err?.name==='AbortError')return;showToast(err?.message==='different-vault'?'That file belongs to a different MONEYLOG vault. Use Restore protected MONEYLOG instead.':err?.message==='permission'?'Give MONEYLOG access to that file and try again.':'Could not reconnect the protected file.');}
 }
 async function restoreProtectedBackup(file,handle=null){
+  if(demoMode){openDemoSignup();return;}
   if(!file)return;
   try{
     const raw=JSON.parse(await file.text());
@@ -547,12 +553,13 @@ function applyTheme(){
 
 function navItem(tab,label,ico){return `<button data-tab="${tab}" class="${currentTab===tab?'active':''}"><span class="nav-ico">${ico}</span><span>${label}</span></button>`;}
 function appShell(content){
+  const demo = demoMode ? `<div class="demo-banner"><div><span class="demo-badge">DEMO</span><div><strong>Preview MONEYLOG before you set it up.</strong><small>This browser preview is read-only. Start using it and we’ll ask for your username, password and recovery code.</small></div></div><button class="btn btn-primary" data-action="start-demo-signup">Create my MONEYLOG</button></div>` : '';
   const update = updateInfo ? `<div class="update-banner"><div><span class="update-kicker">UPDATE AVAILABLE</span><strong>${esc(updateInfo.title||'New MONEYLOG update')}</strong><small>${esc((updateInfo.notes||[]).slice(0,2).join(' · '))}</small></div><button class="btn btn-primary btn-update" data-action="open-update">Update now</button></div>` : '';
   return `<div class="app-shell">
     <aside class="sidebar"><div class="brand"><div class="brand-name">MONEY<span>LOG</span></div><div class="brand-tag">PERSONAL MONEY JOURNAL</div></div>
       <nav class="nav">${navItem('home','Home',ICONS.home)}${navItem('history','History',ICONS.history)}${navItem('insights','Insights',ICONS.insights)}${navItem('settings','Settings',ICONS.settings)}</nav>
       <div class="sidebar-spacer"></div><div class="side-card"><strong>${state.accounts.filter(a=>!a.archived).length} active accounts</strong><small>Your records stay on this device.</small></div><button class="btn btn-ghost" data-action="lock">${ICONS.lock} Lock MONEYLOG</button></aside>
-    <main class="main"><div class="content">${storageQualityStrip()}${update}${content}</div></main>
+    <main class="main"><div class="content">${demo}${storageQualityStrip()}${update}${content}</div></main>
     <nav class="mobile-nav">${navItem('home','Home',ICONS.home)}${navItem('history','History',ICONS.history)}<button class="nav-add" data-action="add" aria-label="Add transaction"><span class="nav-add-icon">${ICONS.plus}</span><span>Add</span></button>${navItem('insights','Insights',ICONS.insights)}${navItem('settings','Settings',ICONS.settings)}</nav>
   </div><footer class="app-footer">Made with <span>♥</span> by nashihab</footer>`;
 }
@@ -572,7 +579,7 @@ function authAccessPanel(){
     <div class="auth-access-head"><strong>Choose how you use MONEYLOG</strong><span class="mini">You can change this later</span></div>
     <div class="auth-access-grid">
       <button type="button" class="auth-access-option ${installed?'is-active':''}" data-action="install"><span class="auth-access-icon">↥</span><span><strong>${installed?'Installed Web App':'Install Web App'}</strong><small>${installed?'Open MONEYLOG like an app':'Recommended for daily use'}</small></span></button>
-      <button type="button" class="auth-access-option" data-action="use-web"><span class="auth-access-icon">↗</span><span><strong>Use Web Version</strong><small>Stay in your browser</small></span></button>
+      <button type="button" class="auth-access-option" data-action="use-web"><span class="auth-access-icon">↗</span><span><strong>Use Web Version</strong><small>Stay in your browser</small></span></button><a class="auth-access-option auth-demo-option" href="?demo=1"><span class="auth-access-icon">◌</span><span><strong>View Demo</strong><small>Explore with sample data</small></span></a>
     </div>
   </div>`;
 }
@@ -622,7 +629,7 @@ function homeView(){
   const latest=recentTransactions(5);
   const hide=state.settings.hideAmounts;
   const accDefault=state.settings.defaultAccountId||activeAccounts[0]?.id;
-  return `<div class="topbar"><div><div class="kicker">${greeting()}</div><h1 class="page-title">Your money, clearly.</h1></div><div class="top-actions"><button class="btn btn-soft optional" data-action="quick-income">${ICONS.income} Income</button><button class="btn btn-ghost btn-icon top-lock" data-action="lock" aria-label="Lock MONEYLOG" title="Lock MONEYLOG"><span class="top-lock-circle">${ICONS.lock}</span></button></div></div>
+  return `<div class="topbar home-topbar"><div><div class="kicker">${greeting()}</div><h1 class="page-title">Your money, clearly.</h1></div><div class="top-actions"><button class="btn btn-soft optional" data-action="quick-income">${ICONS.income} Income</button><button class="btn btn-ghost btn-icon top-lock" data-action="lock" aria-label="Lock MONEYLOG" title="Lock MONEYLOG"><span class="top-lock-circle">${ICONS.lock}</span></button></div></div>
   <section class="hero"><div class="hero-row"><div><div class="kicker label">TOTAL AVAILABLE</div><div class="hero-amount">${hide?'••••••••':esc(formatMoney(totalBalance()))}</div><small class="label">Across ${activeAccounts.length} active account${activeAccounts.length===1?'':'s'}</small><div class="hero-date">Today · ${esc(fmtDate(todayISO()))}</div></div><button class="btn btn-soft" data-action="toggle-hide">${ICONS.eye} ${hide?'Show':'Hide'}</button></div></section>
   <div class="grid grid-4 section"><div class="card stat"><div class="label">THIS MONTH · IN</div><strong class="income">${hide?'••••':esc(formatMoney(totals.income,true))}</strong></div><div class="card stat"><div class="label">THIS MONTH · OUT</div><strong class="expense">${hide?'••••':esc(formatMoney(totals.expense,true))}</strong></div><div class="card stat"><div class="label">NET FLOW</div><strong class="${totals.income-totals.expense>=0?'income':'expense'}">${hide?'••••':esc(formatMoney(totals.income-totals.expense,true))}</strong></div><div class="card stat"><div class="label">BUDGET LEFT</div><strong>${hide?'••••':remaining===null?'-':esc(formatMoney(remaining,true))}</strong></div></div>
   <div class="section"><div class="section-head"><h2>Quick add</h2><span class="mini">Few taps. Done.</span></div><div class="quick-grid"><button class="quick" data-action="quick-expense"><span class="qicon expense">${ICONS.expense}</span><span><strong>Expense</strong><small>Food, transport, bills…</small></span></button><button class="quick" data-action="quick-income"><span class="qicon income">${ICONS.income}</span><span><strong>Income</strong><small>Salary, freelance…</small></span></button><button class="quick" data-action="quick-transfer"><span class="qicon">${ICONS.transfer}</span><span><strong>Transfer</strong><small>Move between accounts</small></span></button></div></div>
@@ -767,6 +774,7 @@ function updateTxFormType(type){
   else {f.classList.remove('hidden');tf.classList.add('hidden');const remembered=type==='expense'?state.settings.lastExpenseCategoryId:state.settings.lastIncomeCategoryId;cat.innerHTML=categoryOptions(type,remembered||'');}
 }
 async function saveTransaction(existing,type){
+  if(demoMode){openDemoSignup();return;}
   const amount=amountMajorToMinor($('#tx-amount').value); if(!amount)return showToast('Enter a valid amount.');
   const accountId=$('#tx-account').value;const toAccountId=type==='transfer'?$('#tx-to').value:'';
   if(type==='transfer'&&(!toAccountId||toAccountId===accountId))return showToast('Choose two different accounts.');
@@ -780,19 +788,19 @@ async function saveTransaction(existing,type){
 
 function accountForm(existing=null){
   modal(existing?'Edit account':'New account',`<form id="account-form"><div class="form-grid two"><div class="field"><label>Name</label><input id="account-name" class="input" required maxlength="40" value="${esc(existing?.name||'')}" placeholder="Cash, Bank, Savings…"></div><div class="field"><label>Type</label><select id="account-type" class="select">${['Cash','Bank','Mobile money','Savings','Other'].map(x=>`<option ${existing?.type===x?'selected':''}>${esc(x)}</option>`).join('')}</select></div></div><div class="field" style="margin-top:12px"><label>Opening balance</label><input id="account-opening" class="input" type="number" step="0.01" value="${existing?existing.openingMinor/100:0}"></div><div class="field" style="margin-top:12px"><label>Description <span class="mini">optional</span></label><input id="account-desc" class="input" maxlength="80" value="${esc(existing?.description||'')}"></div><div class="setting" style="margin-top:5px"><div><div class="setting-title">Archived</div><div class="setting-desc">Keeps historical records but removes the account from quick entry.</div></div><label class="switch"><input id="account-archived" type="checkbox" ${existing?.archived?'checked':''}><span class="slider"></span></label></div><div class="modal-actions"><button type="button" class="btn btn-ghost" data-action="close-modal">Cancel</button><button class="btn btn-primary">Save account</button></div></form>`);
-  $('#account-form').addEventListener('submit',async e=>{e.preventDefault();const name=$('#account-name').value.trim();const opening=Number($('#account-opening').value);if(!name||!Number.isFinite(opening))return showToast('Enter a valid account.');if(existing){Object.assign(existing,{name,type:$('#account-type').value,openingMinor:Math.round(opening*100),description:$('#account-desc').value.trim(),archived:$('#account-archived').checked});}else state.accounts.push({id:uuid(),name,type:$('#account-type').value,openingMinor:Math.round(opening*100),description:$('#account-desc').value.trim(),archived:false});if(!state.settings.defaultAccountId)state.settings.defaultAccountId=state.accounts.find(a=>!a.archived)?.id||null;await saveVault();closeModal();renderApp();showToast('Account saved.');});
+  $('#account-form').addEventListener('submit',async e=>{e.preventDefault();if(demoMode){closeModal();openDemoSignup();return;}const name=$('#account-name').value.trim();const opening=Number($('#account-opening').value);if(!name||!Number.isFinite(opening))return showToast('Enter a valid account.');if(existing){Object.assign(existing,{name,type:$('#account-type').value,openingMinor:Math.round(opening*100),description:$('#account-desc').value.trim(),archived:$('#account-archived').checked});}else state.accounts.push({id:uuid(),name,type:$('#account-type').value,openingMinor:Math.round(opening*100),description:$('#account-desc').value.trim(),archived:false});if(!state.settings.defaultAccountId)state.settings.defaultAccountId=state.accounts.find(a=>!a.archived)?.id||null;await saveVault();closeModal();renderApp();showToast('Account saved.');});
 }
 
 function categoryForm(existing=null,type='expense'){
   const actualType=existing?.type||type;
   modal(existing?'Edit category':'New category',`<form id="cat-form"><div class="field"><label>Type</label><div class="choice-row">${['expense','income'].map(x=>`<button type="button" class="choice ${actualType===x?'active':''}" data-cat-type="${x}">${x[0].toUpperCase()+x.slice(1)}</button>`).join('')}</div></div><div class="field" style="margin-top:14px"><label>Name</label><input id="cat-name" class="input" maxlength="30" required value="${esc(existing?.name||'')}" placeholder="e.g. Coffee"></div><div class="setting" style="margin-top:4px"><div><div class="setting-title">Archived</div><div class="setting-desc">Hidden from new entries; history stays intact.</div></div><label class="switch"><input id="cat-archived" type="checkbox" ${existing?.archived?'checked':''}><span class="slider"></span></label></div><div class="modal-actions"><button type="button" class="btn btn-ghost" data-action="close-modal">Cancel</button><button class="btn btn-primary">Save category</button></div></form>`);
   let catType=actualType;$$('[data-cat-type]').forEach(b=>b.onclick=()=>{catType=b.dataset.catType;$$('[data-cat-type]').forEach(x=>x.classList.toggle('active',x===b));});
-  $('#cat-form').addEventListener('submit',async e=>{e.preventDefault();const name=$('#cat-name').value.trim();if(!name)return showToast('Enter a category name.');const target=state.categories[catType];if(existing){const i=target.findIndex(x=>x.id===existing.id);if(i>=0)Object.assign(target[i],{name,archived:$('#cat-archived').checked});}else if(target.some(c=>c.name.toLowerCase()===name.toLowerCase()))return showToast('That category already exists.');else target.push({id:uuid(),name,archived:false});await saveVault();closeModal();renderApp();showToast('Category saved.');});
+  $('#cat-form').addEventListener('submit',async e=>{e.preventDefault();if(demoMode){closeModal();openDemoSignup();return;}const name=$('#cat-name').value.trim();if(!name)return showToast('Enter a category name.');const target=state.categories[catType];if(existing){const i=target.findIndex(x=>x.id===existing.id);if(i>=0)Object.assign(target[i],{name,archived:$('#cat-archived').checked});}else if(target.some(c=>c.name.toLowerCase()===name.toLowerCase()))return showToast('That category already exists.');else target.push({id:uuid(),name,archived:false});await saveVault();closeModal();renderApp();showToast('Category saved.');});
 }
 
 function goalForm(existing=null){
   modal(existing?'Edit savings goal':'New savings goal',`<form id="goal-form"><div class="field"><label>Goal name</label><input id="goal-name" class="input" required value="${esc(existing?.name||'')}" placeholder="Emergency fund"></div><div class="form-grid two" style="margin-top:12px"><div class="field"><label>Target amount</label><input id="goal-target" class="input" type="number" min="0.01" step="0.01" required value="${existing?existing.targetMinor/100:''}"></div><div class="field"><label>Current saved</label><input id="goal-current" class="input" type="number" min="0" step="0.01" value="${existing?existing.currentMinor/100:0}"></div></div><div class="form-grid two" style="margin-top:12px"><div class="field"><label>Target date <span class="mini">optional</span></label><input id="goal-date" class="input" type="date" value="${esc(existing?.targetDate||'')}"></div><div class="field"><label>Archived</label><label class="switch" style="margin-top:8px"><input id="goal-archived" type="checkbox" ${existing?.archived?'checked':''}><span class="slider"></span></label></div></div><div class="install-hint" style="margin-top:12px">Goal progress is a planning figure. Adding money here does not automatically change an account balance.</div><div class="modal-actions"><button type="button" class="btn btn-ghost" data-action="close-modal">Cancel</button>${existing?'<button type="button" class="btn btn-danger" data-action="delete-goal">Delete</button>':''}<button class="btn btn-primary">Save goal</button></div></form>`);
-  $('#goal-form').addEventListener('submit',async e=>{e.preventDefault();const name=$('#goal-name').value.trim(),target=amountMajorToMinor($('#goal-target').value),cur=Math.round(Math.max(0,Number($('#goal-current').value))*100);if(!name||!target)return showToast('Enter a valid goal and target.');const obj={id:existing?.id||uuid(),name,targetMinor:target,currentMinor:Math.min(cur,target),targetDate:$('#goal-date').value,archived:$('#goal-archived').checked};if(existing)Object.assign(existing,obj);else state.goals.push(obj);await saveVault();closeModal();renderApp();showToast('Goal saved.');});
+  $('#goal-form').addEventListener('submit',async e=>{e.preventDefault();if(demoMode){closeModal();openDemoSignup();return;}const name=$('#goal-name').value.trim(),target=amountMajorToMinor($('#goal-target').value),cur=Math.round(Math.max(0,Number($('#goal-current').value))*100);if(!name||!target)return showToast('Enter a valid goal and target.');const obj={id:existing?.id||uuid(),name,targetMinor:target,currentMinor:Math.min(cur,target),targetDate:$('#goal-date').value,archived:$('#goal-archived').checked};if(existing)Object.assign(existing,obj);else state.goals.push(obj);await saveVault();closeModal();renderApp();showToast('Goal saved.');});
   if(existing)$('#modal-root').dataset.editingId=existing.id;
 }
 
@@ -800,7 +808,7 @@ function recurringForm(existing=null){
   const t=existing?.type||'expense';const acc=existing?.accountId||state.settings.defaultAccountId||state.accounts.find(a=>!a.archived)?.id||'';
   modal(existing?'Edit recurring entry':'New recurring entry',`<form id="recurring-form"><div class="field"><label>Name</label><input id="rec-name" class="input" required value="${esc(existing?.name||'')}" placeholder="Salary, rent, internet…"></div><div class="choice-row" style="margin-top:12px">${['expense','income'].map(x=>`<button type="button" class="choice ${t===x?'active':''}" data-rec-type="${x}">${x[0].toUpperCase()+x.slice(1)}</button>`).join('')}</div><div class="form-grid two" style="margin-top:12px"><div class="field"><label>Amount</label><input id="rec-amount" class="input" type="number" min="0.01" step="0.01" required value="${existing?existing.amountMinor/100:''}"></div><div class="field"><label>Category</label><select id="rec-cat" class="select">${categoryOptions(t,existing?.categoryId)}</select></div></div><div class="form-grid two" style="margin-top:12px"><div class="field"><label>Account</label><select id="rec-account" class="select">${accountOptions(acc)}</select></div><div class="field"><label>Frequency</label><select id="rec-frequency" class="select">${['daily','weekly','monthly','yearly'].map(x=>`<option ${existing?.frequency===x?'selected':''}>${x}</option>`).join('')}</select></div></div><div class="form-grid two" style="margin-top:12px"><div class="field"><label>Next date</label><input id="rec-next" class="input" type="date" required value="${existing?.nextDate||todayISO()}"></div><div class="field"><label>Active</label><label class="switch" style="margin-top:7px"><input id="rec-active" type="checkbox" ${existing?.active!==false?'checked':''}><span class="slider"></span></label></div></div><div class="field" style="margin-top:12px"><label>Note <span class="mini">optional</span></label><input id="rec-note" class="input" value="${esc(existing?.note||'')}"></div><div class="install-hint" style="margin-top:12px">Recurring entries are created when MONEYLOG opens. Duplicate entries are prevented by storing each generated date.</div><div class="modal-actions"><button type="button" class="btn btn-ghost" data-action="close-modal">Cancel</button>${existing?'<button type="button" class="btn btn-danger" data-action="delete-recurring">Delete</button>':''}<button class="btn btn-primary">Save recurring entry</button></div></form>`);
   let recType=t;$$('[data-rec-type]').forEach(b=>b.onclick=()=>{recType=b.dataset.recType;$$('[data-rec-type]').forEach(x=>x.classList.toggle('active',x===b));$('#rec-cat').innerHTML=categoryOptions(recType,'');});
-  $('#recurring-form').addEventListener('submit',async e=>{e.preventDefault();const amount=amountMajorToMinor($('#rec-amount').value);if(!amount)return showToast('Enter a valid amount.');const obj={id:existing?.id||uuid(),name:$('#rec-name').value.trim(),type:recType,amountMinor:amount,categoryId:$('#rec-cat').value,accountId:$('#rec-account').value,frequency:$('#rec-frequency').value,nextDate:$('#rec-next').value,active:$('#rec-active').checked,note:$('#rec-note').value.trim(),generatedDates:existing?.generatedDates||[]};if(existing)Object.assign(existing,obj);else state.recurring.push(obj);await processRecurring();await saveVault();closeModal();renderApp();showToast('Recurring entry saved.');});
+  $('#recurring-form').addEventListener('submit',async e=>{e.preventDefault();if(demoMode){closeModal();openDemoSignup();return;}const amount=amountMajorToMinor($('#rec-amount').value);if(!amount)return showToast('Enter a valid amount.');const obj={id:existing?.id||uuid(),name:$('#rec-name').value.trim(),type:recType,amountMinor:amount,categoryId:$('#rec-cat').value,accountId:$('#rec-account').value,frequency:$('#rec-frequency').value,nextDate:$('#rec-next').value,active:$('#rec-active').checked,note:$('#rec-note').value.trim(),generatedDates:existing?.generatedDates||[]};if(existing)Object.assign(existing,obj);else state.recurring.push(obj);await processRecurring();await saveVault();closeModal();renderApp();showToast('Recurring entry saved.');});
   if(existing)$('#modal-root').dataset.editingId=existing.id;
 }
 function addDays(date,frequency){const d=new Date(`${date}T00:00:00`);if(frequency==='daily')d.setDate(d.getDate()+1);if(frequency==='weekly')d.setDate(d.getDate()+7);if(frequency==='monthly')d.setMonth(d.getMonth()+1);if(frequency==='yearly')d.setFullYear(d.getFullYear()+1);return d.toISOString().slice(0,10);}
@@ -811,19 +819,23 @@ async function processRecurring(){
 }
 
 async function changePassword(){
+  if(demoMode){openDemoSignup();return;}
   modal('Change MONEYLOG password',`<form id="pw-form"><div class="field"><label>Current password</label><input id="pw-old" class="input" type="password" required autocomplete="current-password"></div><div class="field" style="margin-top:12px"><label>New password</label><input id="pw-new" class="input" type="password" minlength="8" required autocomplete="new-password"></div><div class="field" style="margin-top:12px"><label>Confirm new password</label><input id="pw-confirm" class="input" type="password" minlength="8" required autocomplete="new-password"></div><div class="field" style="margin-top:12px"><label>Recovery code</label><input id="pw-recovery" class="input" required placeholder="Required to keep password recovery working"></div><div class="install-hint" style="margin-top:12px">Your recovery code is used to wrap the new password key. It is not stored in plain text.</div><div class="modal-actions"><button type="button" class="btn btn-ghost" data-action="close-modal">Cancel</button><button class="btn btn-primary">Change password</button></div></form>`);
   $('#pw-form').addEventListener('submit',async e=>{e.preventDefault();const old=$('#pw-old').value,n=$('#pw-new').value,c=$('#pw-confirm').value,rcode=$('#pw-recovery').value.trim();if(n.length<8||n!==c)return showToast('Check the new password.');try{const meta=await idbGet('meta','security'),recovery=await idbGet('meta','recovery');const oldKey=await deriveKey(old,b64ToBytes(meta.salt));const check=await decryptText(meta.check,oldKey);if(!['MONEYLOG-PASSWORD-CHECK-v2','MONEYLOG-PASSWORD-CHECK-v3'].includes(check))throw new Error('WRONG');if(!recovery)throw new Error('NO_RECOVERY');const rkey=await deriveKey(rcode,b64ToBytes(recovery.salt));await decryptText(recovery.wrapped,rkey);const salt=crypto.getRandomValues(new Uint8Array(16)),key=await deriveKey(n,salt),newCheck=await encryptText('MONEYLOG-PASSWORD-CHECK-v3',key);const newRKey=await deriveKey(rcode,b64ToBytes(recovery.salt)),wrapped=await encryptText(bytesToB64(await exportKeyRaw(key)),newRKey);sessionKey=key;await idbPut('meta',{key:'security',salt:bytesToB64(salt),check:newCheck});await idbPut('meta',{key:'recovery',username:recovery.username,salt:recovery.salt,wrapped});await saveVault();const protectedMeta=await idbGet('meta','protectedBackup').catch(()=>null);if(protectedMeta?.handle){const wrapSalt=crypto.getRandomValues(new Uint8Array(16)),wrapKey=await deriveKey(n,wrapSalt),wrappedKey=await encryptText(bytesToB64(await exportKeyRaw(key)),wrapKey);if(await saveProtectedEnvelope(protectedMeta.handle,bytesToB64(wrapSalt),wrappedKey)){} }closeModal();showToast('Password changed and protection refreshed.');}catch(err){showToast(err.message==='NO_RECOVERY'?'Set up a recovery method first.':'Current password or recovery code is not correct.');}});
 }
 
 async function exportBackup(){
+  if(demoMode){openDemoSignup();return;}
   const p=prompt('Create a password for this backup file (8+ characters).');if(!p)return;if(p.length<8)return showToast('Use at least 8 characters.');
   const salt=crypto.getRandomValues(new Uint8Array(16)),key=await deriveKey(p,salt);const payload={format:'moneylog',version:3,exportedAt:new Date().toISOString(),state};const encrypted=await encryptText(JSON.stringify(payload),key);const file={magic:'MONEYLOG',version:3,salt:bytesToB64(salt),...encrypted};const blob=new Blob([JSON.stringify(file)],{type:'application/octet-stream'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`moneylog-${todayISO()}.moneylog`;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);state.settings.lastBackupAt=new Date().toISOString();await saveVault();showToast('Encrypted backup exported.');
 }
 async function restoreBackup(file){
+  if(demoMode){openDemoSignup();return;}
   if(!file)return;try{const raw=JSON.parse(await file.text());if(raw.magic!=='MONEYLOG'||![2,3].includes(raw.version))throw new Error('unsupported');const p=prompt('Enter the backup password.');if(!p)return;const key=await deriveKey(p,b64ToBytes(raw.salt));const data=JSON.parse(await decryptText(raw,key));if(!data.state)throw new Error('invalid');if(!confirm('Replace all current MONEYLOG data with this backup? This cannot be undone.'))return;state=validateState(data.state);await saveVault();renderApp();showToast('Backup restored.');}catch{showToast('Could not restore this backup. Check the password or file.');}}
 function exportCSV(){const rows=[['Date','Type','Category','Account','To account','Amount','Note'],...filteredTransactions().map(t=>[t.date,t.type,t.type==='transfer'?'Transfer':categoryName(t.type,t.categoryId),accountName(t.accountId),accountName(t.toAccountId),(t.type==='expense'?-1:t.type==='income'?1:1)*(t.amountMinor/100),t.note||''])];const csv=rows.map(r=>r.map(x=>`"${String(x).replace(/"/g,'""')}"`).join(',')).join('\n');const blob=new Blob([csv],{type:'text/csv'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`moneylog-${todayISO()}.csv`;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);}
 
 async function saveDurableBackup(){
+  if(demoMode){openDemoSignup();return;}
   let handle=null;
   if(window.showSaveFilePicker){try{[handle]=await window.showSaveFilePicker({suggestedName:'moneylog-vault.moneylog',types:[{description:'MONEYLOG encrypted vault',accept:{'application/octet-stream':['.moneylog']}}]});}catch(err){if(err?.name==='AbortError')return;}}
   const p=prompt('Create a password for this durable .moneylog file (8+ characters).');if(!p)return;if(p.length<8)return showToast('Use at least 8 characters.');
@@ -835,7 +847,7 @@ function isInstalledWebApp(){
   return window.matchMedia('(display-mode: standalone)').matches || window.matchMedia('(display-mode: fullscreen)').matches || navigator.standalone === true || localStorage.getItem('moneylog-installed')==='1';
 }
 function maybeShowInstallChoice(){
-  if(isInstalledWebApp())return;
+  if(demoMode||isInstalledWebApp())return;
   if(localStorage.getItem('moneylog-entry-choice'))return;
   setTimeout(()=>{if($('#modal-root').dataset.open)return;modal('Choose your MONEYLOG experience',`<p class="muted">MONEYLOG works in your browser, but the installed Web App is the recommended way to use it every day.</p><div class="install-choice-grid"><button class="install-option install-option-primary" data-action="install-choice" data-choice="install"><span class="install-option-icon">⇩</span><span><strong>Install Web App <em class="recommended-badge">Recommended</em></strong><small>Own app icon, app-style window, easier daily access.</small></span></button><button class="install-option" data-action="install-choice" data-choice="web"><span class="install-option-icon">↗</span><span><strong>Use Web Version</strong><small>No installation • opens directly in the browser</small></span></button></div><div class="web-warning"><strong>Recommended: install the Web App.</strong><br>Browser storage is still controlled by the device. Data Shield adds persistent-storage protection and an encrypted file outside site storage for recovery.</div>`);},250);
 }
@@ -873,66 +885,155 @@ function showUpdateProgress(){
   modal('Updating MONEYLOG',`<div class="update-progress"><div class="update-spinner"></div><strong id="update-progress-title">Preparing update…</strong><span id="update-progress-copy">Refreshing the app shell before switching versions.</span><div class="update-steps"><span class="active">Prepare</span><span>Install</span><span>Reload</span></div></div>`,{wide:false});
 }
 function updateProgress(title,copy,step=0){$('#update-progress-title')?.replaceChildren(document.createTextNode(title));$('#update-progress-copy')?.replaceChildren(document.createTextNode(copy));$$('.update-steps span').forEach((el,i)=>el.classList.toggle('active',i<=step));}
-function waitForControllerChange(timeout=12000){
+function waitForControllerChange(timeout=12000,target=null){
   return new Promise(resolve=>{
     let done=false;
     const finish=changed=>{if(done)return;done=true;navigator.serviceWorker.removeEventListener('controllerchange',onChange);clearTimeout(timer);resolve(changed);};
-    const onChange=()=>finish(true);
+    const onChange=()=>finish(!target||navigator.serviceWorker.controller===target);
     const timer=setTimeout(()=>finish(false),timeout);
-    navigator.serviceWorker.addEventListener('controllerchange',onChange,{once:true});
+    navigator.serviceWorker.addEventListener('controllerchange',onChange);
   });
 }
-async function waitForWorkerInstalled(worker,timeout=15000){
-  if(!worker)return false;
-  if(worker.state==='installed' || worker.state==='activated')return true;
+function waitForWorkerInstalled(worker,timeout=12000){
+  if(!worker)return Promise.resolve(false);
+  if(worker.state==='installed'||worker.state==='activated')return Promise.resolve(true);
   return new Promise(resolve=>{
     let settled=false;
     const timer=setTimeout(()=>{if(settled)return;settled=true;worker.removeEventListener('statechange',onState);resolve(false);},timeout);
-    const onState=()=>{if(worker.state==='installed'||worker.state==='activated'){if(settled)return;settled=true;clearTimeout(timer);worker.removeEventListener('statechange',onState);resolve(true);}else if(worker.state==='redundant'){if(settled)return;settled=true;clearTimeout(timer);worker.removeEventListener('statechange',onState);resolve(false);}};
+    const onState=()=>{
+      if(worker.state==='installed'||worker.state==='activated'){
+        if(settled)return;settled=true;clearTimeout(timer);worker.removeEventListener('statechange',onState);resolve(true);
+      }else if(worker.state==='redundant'){
+        if(settled)return;settled=true;clearTimeout(timer);worker.removeEventListener('statechange',onState);resolve(false);
+      }
+    };
     worker.addEventListener('statechange',onState);
   });
 }
+async function waitForNewWorker(reg,timeout=15000){
+  const started=Date.now();
+  while(Date.now()-started<timeout){
+    if(reg.waiting)return reg.waiting;
+    const candidate=reg.installing;
+    if(candidate){
+      const remaining=Math.max(1000,timeout-(Date.now()-started));
+      await waitForWorkerInstalled(candidate,Math.min(7000,remaining));
+      if(reg.waiting)return reg.waiting;
+      if(candidate.state==='installed')return candidate;
+      if(candidate===reg.active && candidate.state==='activated')return candidate;
+    }
+    await sleep(150);
+    if(reg.waiting)return reg.waiting;
+    await reg.update().catch(()=>{});
+  }
+  return reg.waiting||null;
+}
+async function refreshAppShellCache(){
+  if(!('caches' in window))throw new Error('NO_CACHE_STORAGE');
+  const names=await caches.keys();
+  const cacheName=names.find(name=>name.startsWith('moneylog-cache-'));
+  if(!cacheName)throw new Error('NO_APP_CACHE');
+  const cache=await caches.open(cacheName);
+  const assets=['./','./index.html','./demo.html','./manifest.json','./version.json','./assets/styles.css','./assets/app.js','./assets/icon.svg','./assets/icon-192.png','./assets/icon-512.png'];
+  const stamp=Date.now();
+  for(const url of assets){
+    const response=await fetch(`${url}?moneylog-update=${stamp}`,{cache:'no-store'});
+    if(!response.ok)throw new Error(`ASSET_UPDATE_FAILED:${url}`);
+    // Store under the canonical URL so the active service worker serves the fresh file on reload.
+    await cache.put(url,response.clone());
+  }
+}
+
 async function applyUpdate(){
   if(updateReloadPending)return;
   updateReloadPending=true;
-  const target=updateInfo?.version||'';
-  try{localStorage.setItem('moneylog-pending-update',target);}catch{}
   showUpdateProgress();
   try{
     const reg=await navigator.serviceWorker.getRegistration() || await navigator.serviceWorker.register('./sw.js',{updateViaCache:'none'});
-    updateProgress('Checking the new app shell…','Contacting the service worker without touching your financial records.',0);
+    updateProgress('Checking the new app shell…','Refreshing the service worker without touching your financial records.',0);
     await reg.update();
-    let worker=reg.waiting;
-    if(!worker && reg.installing){
-      updateProgress('Installing the update…','Downloading the new app files now.',1);
-      await waitForWorkerInstalled(reg.installing);
-      worker=reg.waiting||reg.installing;
+    const previousController=navigator.serviceWorker.controller;
+    let worker=reg.waiting||reg.installing;
+    if(worker && worker.state==='installing'){
+      updateProgress('Installing the update…','Downloading the new app shell now.',1);
+      await waitForWorkerInstalled(worker,12000);
+      worker=reg.waiting||reg.active||worker;
     }
-    if(worker){
-      updateProgress('Installing the update…','Switching the app shell once the new files are ready.',1);
-      const controllerChange=waitForControllerChange();
-      worker.postMessage({type:'SKIP_WAITING'});
-      const changed=await controllerChange;
-      if(!changed && navigator.serviceWorker.controller!==worker){throw new Error('UPDATE_CONTROL_TIMEOUT');}
+    if(reg.waiting){
+      worker=reg.waiting;
+      updateProgress('Activating the update…','Switching this open page to the new app shell.',1);
+      const controllerPromise=(previousController && reg.waiting!==previousController)?waitForControllerChange(12000,reg.waiting):Promise.resolve(navigator.serviceWorker.controller===reg.waiting);
+      reg.waiting.postMessage({type:'SKIP_WAITING'});
+      const changed=await controllerPromise;
+      if(!changed){
+        // Some browsers activate the worker without dispatching controllerchange to an already-open tab.
+        await sleep(250);
+        if(navigator.serviceWorker.controller!==reg.active){
+          await refreshAppShellCache();
+        }
+      }
+    }else if(previousController && reg.active && reg.active!==previousController){
+      // The worker activated very quickly; let clients.claim() finish the handoff if needed.
+      await waitForControllerChange(2500,reg.active).catch(()=>false);
+    }else{
+      // Fallback for deployments where the service-worker script did not change.
+      updateProgress('Refreshing app files…','Updating the current app shell directly so one click is enough.',1);
+      await refreshAppShellCache();
     }
-    updateProgress('Reloading MONEYLOG…','Opening the new version now.',2);
-    await sleep(250);
-    location.reload();
+    updateProgress('Opening the updated app…','The new version is ready. Reloading now.',2);
+    try{localStorage.setItem('moneylog-pending-update',updateInfo?.version||'');}catch{}
+    setTimeout(()=>location.reload(),180);
   }catch(err){
     console.error(err);
     updateReloadPending=false;
+    updateUiOpen=false;
     try{localStorage.removeItem('moneylog-pending-update');}catch{}
-    updateProgress('Update could not finish','Your current vault is still intact. Try Update now again when you are online.',0);
-    setTimeout(()=>{closeModal();updateUiOpen=false;showToast('The update could not be completed. Your data is still safe.');},1200);
+    closeModal();
+    showToast('Update could not be completed. Your current version is still safe.');
   }
 }
+
 async function registerSW(){
-  if(!('serviceWorker' in navigator))return;
+  if(!('serviceWorker' in navigator))return null;
   try{
-    await navigator.serviceWorker.register('./sw.js',{updateViaCache:'none'});
+    const reg=await navigator.serviceWorker.register('./sw.js',{updateViaCache:'none'});
+    await reg.update().catch(()=>{});
     const pending=localStorage.getItem('moneylog-pending-update');
     if(pending && pending===APP_VERSION) localStorage.removeItem('moneylog-pending-update');
-  }catch{}
+    return reg;
+  }catch{return null;}
+}
+
+function demoState(){
+  const s=defaultState();
+  const cash=s.accounts[0];
+  const bank={id:uuid(),name:'Bank',type:'Bank',openingMinor:85000,description:'Demo account',archived:false};
+  s.accounts=[cash,bank];
+  s.settings.defaultAccountId=cash.id;
+  const today=todayISO();
+  const salary=s.categories.income.find(c=>c.name==='Salary')?.id||s.categories.income[0].id;
+  const food=s.categories.expense.find(c=>c.name==='Food')?.id||s.categories.expense[0].id;
+  const transport=s.categories.expense.find(c=>c.name==='Transport')?.id||s.categories.expense[1].id;
+  s.transactions=[
+    {id:uuid(),type:'income',amountMinor:180000,date:today,time:'09:00',accountId:cash.id,toAccountId:'',categoryId:salary,note:'Salary',updatedAt:new Date().toISOString()},
+    {id:uuid(),type:'expense',amountMinor:8500,date:today,time:'13:10',accountId:cash.id,toAccountId:'',categoryId:food,note:'Lunch',updatedAt:new Date().toISOString()},
+    {id:uuid(),type:'expense',amountMinor:3200,date:today,time:'18:20',accountId:bank.id,toAccountId:'',categoryId:transport,note:'Ride',updatedAt:new Date().toISOString()},
+    {id:uuid(),type:'transfer',amountMinor:15000,date:today,time:'20:00',accountId:cash.id,toAccountId:bank.id,categoryId:'',note:'Demo transfer',updatedAt:new Date().toISOString()}
+  ];
+  s.budgets.overallMinor=60000;
+  s.goals=[{id:uuid(),name:'Emergency fund',targetMinor:300000,currentMinor:96000,targetDate:'',archived:false}];
+  s.settings.hideAmounts=false;
+  return s;
+}
+function openDemoSignup(){
+  modal('Create your personal MONEYLOG',`<p class="muted">This browser preview is read-only. Before MONEYLOG accepts your first real entry, create your local username, password and recovery code.</p><div class="demo-signup-points"><div><strong>Private</strong><span>Stored on your device</span></div><div><strong>Protected</strong><span>Password + recovery code</span></div><div><strong>Offline-first</strong><span>No cloud account required</span></div></div><div class="modal-actions"><button class="btn btn-ghost" data-action="close-modal">Stay in demo</button><button class="btn btn-primary" data-action="start-demo-signup">Create my MONEYLOG</button></div>`);
+}
+function exitDemoToSignup(){
+  demoMode=false;
+  try{history.replaceState({},'',location.pathname+location.hash);}catch{}
+  closeModal();
+  renderAuth('setup');
+  setupPassword();
 }
 
 function renderAuthAgain(){if(sessionKey)renderApp();else login();}
@@ -941,6 +1042,9 @@ $('#app').addEventListener('click',async e=>{
   const tabBtn=e.target.closest('[data-tab]');if(tabBtn&&!tabBtn.dataset.action){currentTab=tabBtn.dataset.tab;resetAutoLockTimer();renderApp();return;}
   const el=e.target.closest('[data-action]');if(!el)return;const action=el.dataset.action;const id=el.dataset.id;
   try{
+    if(action==='start-demo-signup'){exitDemoToSignup();return;}
+    const demoMutations=new Set(['add','quick-expense','quick-income','quick-transfer','edit-tx','delete-tx','add-account','edit-account','add-category','edit-category','add-goal','edit-goal','add-recurring','edit-recurring','change-password','save-budget','theme','setting-hide','setting-autolock','setting-currency','setting-reminder','export-backup','export-csv','setup-data-shield','restore-protected','connect-protected']);
+    if(demoMode&&demoMutations.has(action)){openDemoSignup();return;}
     if(action==='add'||action==='quick-expense'||action==='quick-income'||action==='quick-transfer')transactionForm(null,action==='quick-income'?'income':action==='quick-transfer'?'transfer':'expense');
     else if(action==='edit-tx')transactionForm(state.transactions.find(t=>t.id===id));
     else if(action==='delete-tx'){if(confirm('Delete this transaction?')){state.transactions=state.transactions.filter(t=>t.id!==$('#modal-root').dataset.editingId);await saveVault();closeModal();renderApp();showToast('Transaction deleted.');}}
@@ -1013,7 +1117,7 @@ window.addEventListener('beforeinstallprompt',e=>{
   if(state && !$('#modal-root').dataset.open && !localStorage.getItem('moneylog-entry-choice')) maybeShowInstallChoice();
 });
 function maybeShowDataShieldPrompt(attempt=0){
-  if(!state||storageProtectionStatus.backup)return;
+  if(!state||demoMode||storageProtectionStatus.backup)return;
   try{if(localStorage.getItem('moneylog-shield-prompted')==='1')return;}catch{}
   setTimeout(()=>{
     if($('#modal-root').dataset.open){ if(attempt<8) maybeShowDataShieldPrompt(attempt+1); return; }
@@ -1057,8 +1161,20 @@ window.addEventListener('pageshow',()=>{if(state)resetAutoLockTimer();});
 
 (async function boot(){
   try{
-    db=await openDB(); await refreshStorageProtectionStatus(); await registerSW();
+    db=await openDB();
+    await refreshStorageProtectionStatus();
+    await registerSW();
     const security=await idbGet('meta','security');
+    const webPreview=!isInstalledWebApp()&&!security;
+    if(demoMode || webPreview){
+      demoMode=true;
+      state=demoState();
+      sessionKey={demo:true};
+      applyTheme();
+      renderApp();
+      checkForUpdate(true);
+      return;
+    }
     if(!security){ clearSession(); await setupPassword(); }
     else if(await resumeSessionAfterRefresh()){ await finishUnlock(); }
     else await login();

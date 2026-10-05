@@ -1,5 +1,5 @@
-const CACHE_VERSION='moneylog-cache-2.4.0';
-const CORE=['./','./index.html','./manifest.json','./version.json','./assets/styles.css','./assets/app.js','./assets/icon.svg','./assets/icon-192.png','./assets/icon-512.png'];
+const CACHE_VERSION='moneylog-cache-2.5.1';
+const CORE=['./','./index.html','./demo.html','./manifest.json','./version.json','./assets/styles.css','./assets/app.js','./assets/icon.svg','./assets/icon-192.png','./assets/icon-512.png'];
 self.addEventListener('install',event=>event.waitUntil((async()=>{
   const cache=await caches.open(CACHE_VERSION);
   await Promise.all(CORE.map(url=>cache.add(new Request(url,{cache:'reload'}))));

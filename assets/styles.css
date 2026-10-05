@@ -184,7 +184,7 @@ body.modal-open{overflow:hidden}
 @media(prefers-reduced-motion:reduce){.quick:hover,.install-option:hover,.auth-access-option:hover,.top-lock:hover{transform:none!important}}
 
 
-/* MONEYLOG 2.4.0 visual system */
+/* MONEYLOG visual system */
 :root{
   --shadow-soft:0 8px 28px rgba(13,33,27,.055);
   --shadow-float:0 14px 34px rgba(13,33,27,.095);
@@ -278,3 +278,17 @@ body{background:radial-gradient(circle at 8% 0%,color-mix(in srgb,var(--brand-so
 [data-theme=dark] .update-banner{background:linear-gradient(135deg,rgba(27,59,47,.72),rgba(20,29,25,.9))}
 [data-theme=dark] .shield-heading-icon{box-shadow:inset 0 1px 0 rgba(215,242,231,.04)}
 [data-theme=dark] .shield-badge.is-safe{background:rgba(83,177,139,.11)}
+
+/* 2.5.1 visual polish */
+.home-topbar{margin-bottom:10px}.home-topbar + .hero{margin-top:0}.content{padding-top:2px}.demo-banner{display:flex;align-items:center;justify-content:space-between;gap:14px;margin:0 0 12px;padding:13px 14px;border:1px solid color-mix(in srgb,var(--brand) 17%,var(--line));border-radius:16px;background:linear-gradient(135deg,color-mix(in srgb,var(--brand-soft) 60%,var(--glass-bg)),var(--glass-bg));box-shadow:0 8px 24px rgba(21,92,71,.055)}.demo-banner>div{display:flex;align-items:center;gap:10px;min-width:0}.demo-banner strong,.demo-banner small{display:block}.demo-banner strong{font-size:12px}.demo-banner small{color:var(--muted);font-size:10.5px;margin-top:2px}.demo-badge{display:grid;place-items:center;min-width:42px;height:24px;padding:0 8px;border-radius:999px;background:var(--brand);color:#fff;font-size:9px;font-weight:900;letter-spacing:.08em}.auth-access-option.auth-demo-option{text-decoration:none}.demo-signup-points{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin:14px 0}.demo-signup-points>div{padding:9px 10px;border:1px solid var(--line);background:var(--surface-2);border-radius:12px}.demo-signup-points strong,.demo-signup-points span{display:block}.demo-signup-points strong{font-size:11px}.demo-signup-points span{font-size:10px;color:var(--muted);margin-top:2px}.quality-risk{color:var(--warning);border-color:color-mix(in srgb,var(--warning) 24%,var(--line));background:color-mix(in srgb,var(--warning) 6%,var(--glass-bg))}.quality-safe{color:var(--brand);border-color:color-mix(in srgb,var(--brand) 18%,var(--line))}@media(max-width:620px){.demo-banner{align-items:flex-start;flex-direction:column}.demo-banner .btn{width:100%}.demo-signup-points{grid-template-columns:1fr}.home-topbar{margin-bottom:9px}}
+[data-theme=dark] .demo-banner{background:linear-gradient(135deg,rgba(27,59,47,.72),rgba(20,29,25,.88))}
+
+
+/* 2.5.1 functional polish */
+.btn,.quick,.account-card,.nav button,.mobile-nav button,.auth-access-option,.install-option,.top-lock,.input,.select,.textarea,.card{transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease,background-color .18s ease,color .18s ease,opacity .18s ease}
+.btn:not(:disabled):active,.quick:active,.account-card:active,.auth-access-option:active,.install-option:active{transform:translateY(1px);transition-duration:.08s}
+.home-topbar{flex-wrap:nowrap}
+.home-topbar>div:first-child{width:auto;flex:1;min-width:0}
+.home-topbar .top-actions{width:auto;flex:none;flex-wrap:nowrap}
+@media(max-width:620px){.home-topbar{align-items:center;gap:8px;margin-bottom:10px}.home-topbar .top-actions{width:auto;justify-content:flex-end}.home-topbar .page-title{max-width:calc(100vw - 92px)}.home-topbar .top-lock{width:42px!important;height:42px!important}.home-topbar + .hero{margin-top:0}}
+@media(prefers-reduced-motion:reduce){.btn,.quick,.account-card,.nav button,.mobile-nav button,.auth-access-option,.install-option,.top-lock,.input,.select,.textarea,.card{transition:none}.btn:not(:disabled):active,.quick:active,.account-card:active,.auth-access-option:active,.install-option:active{transform:none}}

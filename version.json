@@ -1,12 +1,13 @@
 {
-  "version": "2.4.0",
-  "released": "2026-10-05",
-  "title": "MONEYLOG 2.4.0",
-  "notes": [
-    "Overhauled the visual system for cleaner hierarchy, calmer surfaces, and better responsive spacing",
-    "Fixed Data Shield action overlap and kept protection checks on one compact line",
-    "Changed every update action label to Update now and rebuilt the handoff to verify the new service worker before reload",
-    "Hardened service-worker installation with cache-busting app-shell requests and updateViaCache disabled",
-    "Refined setup, settings, mobile controls, status chips, buttons, update banner, and Data Shield presentation"
+  "version":"2.5.1",
+  "released":"2026-10-05",
+  "title":"MONEYLOG 2.5.1",
+  "notes":[
+    "Fixed one-tap updates so the open app refreshes to the new version without requiring a close and reopen",
+    "Hardened the direct app-cache refresh fallback so refreshed files are served on the next reload",
+    "Fixed the Home mobile spacing caused by the wrapped top action row",
+    "Made the browser version open as a read-only Home preview before setup",
+    "Entering a real action from the browser preview now takes you directly to secure account setup",
+    "Polished transitions and interaction timing across the main UI"
   ]
 }

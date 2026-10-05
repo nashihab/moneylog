@@ -5,6 +5,7 @@ The repository is organized so GitHub Pages can deploy it directly without a bui
 ```text
 MONEYLOG/
 ├── index.html          Application entry point
+├── demo.html           Read-only demo entry point
 ├── manifest.json       PWA manifest
 ├── sw.js               Service worker and offline cache
 ├── version.json        Public release metadata used by update checks

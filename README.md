@@ -136,6 +136,8 @@ vault. Existing local data is not replaced without confirmation.
 
 MONEYLOG checks `version.json` when online.
 
+If you publish a new release, increase `APP_VERSION` in `assets/app.js` and the `version` in `version.json`. If the service worker code itself changes, also increase `CACHE_VERSION` in `sw.js`. The update flow can refresh the active app cache directly when `sw.js` did not change, so users do not need a second update just because the worker script stayed the same.
+
 When a newer release is available, the interface shows **Update now**. The update flow:
 
 1. refreshes the service-worker registration with HTTP cache bypass;
@@ -206,7 +208,7 @@ site data unless an external backup exists.
 
 Copyright © 2026 nashihab. All rights reserved.
 
-The source is **source-available, not open source** under an OSI-approved license.
+The source is **source-available and not distributed under an OSI-approved open-source license**.
 Viewing, studying, and private non-commercial use are permitted under the accompanying
 `LICENSE` file.
 
@@ -224,3 +226,22 @@ Made with ♥ by nashihab
 Developer: https://nashihab.github.io
 
 Original project: https://github.com/nashihab/moneylog
+
+
+## Web preview
+
+A first-time browser visit opens a read-only Home preview automatically. It is a safe
+way to explore the interface before creating a local vault. The preview uses sample
+records and never writes them to the user's MONEYLOG vault.
+
+The moment you choose a real data action, MONEYLOG switches to secure setup and asks
+for a local username, password, and recovery code. After setup, the normal private
+local-vault experience continues as usual. The explicit `demo.html` and `?demo=1`
+entry points remain available for the same read-only preview.
+
+## 2.5.1
+
+This release fixes the in-place update handoff, removes the Home mobile spacing issue,
+and makes the first-time browser experience a read-only Home preview before secure
+account setup. It also hardens the service-worker/cache update fallback and smooths
+core interaction transitions.
