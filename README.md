@@ -4,6 +4,10 @@ MONEYLOG is a privacy-first PWA built from scratch for everyday personal finance
 
 ## What this build includes
 
+- First-run choice: **Install Web App** or **Use Web Version**
+- Local username + password + recovery-code setup
+- Password reset using the locally configured recovery code
+
 - Password-protected local vault
 - AES-GCM encrypted vault data with password-derived key
 - Home dashboard with balance, monthly flow and budget
@@ -75,3 +79,16 @@ This protects the stored app data against ordinary local storage inspection, but
 ## Important reminder limitation
 
 A PWA can provide persistent service-worker notifications, but exact daily-at-a-specific-minute background behavior depends on the browser/OS. Periodic Background Sync is intentionally best-effort. For a hard real-time alarm guarantee on every Android device, a native Android implementation would be the correct platform choice.
+
+
+## Storage warning
+
+For everyday use, **install MONEYLOG as a Web App**. The browser version stores the encrypted vault in browser storage. Browser/site-data cleanup, storage clearing, or browser uninstallation can remove that local vault. A web page cannot prevent the browser or operating system from clearing its storage.
+
+MONEYLOG therefore provides an explicit encrypted `.moneylog` durable-vault workflow. Use **Save .moneylog file** in Settings and keep that file somewhere outside the browser. Deleting the file itself is a manual file operation. Restore it with your backup password when needed.
+
+The durable file is intentionally separate from browser cache. Clearing cache does not delete the external file, but clearing browser storage can still remove the local in-browser copy.
+
+## Recovery
+
+The first-run setup requires a local username, password, and recovery code. The recovery code is not stored in plain text. It wraps the current vault key so that a user who knows the correct username and recovery code can reset the password on that device. MONEYLOG cannot email, retrieve, or bypass a lost recovery code.
