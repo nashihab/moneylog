@@ -1,5 +1,5 @@
 /* MONEYLOG PWA - local-first encrypted personal finance journal */
-const APP_VERSION = '2.3.1';
+const APP_VERSION = '2.4.0';
 const UPDATE_MANIFEST_URL = './version.json';
 const DB_NAME = 'moneylog-secure-v2';
 const DB_VERSION = 1;
@@ -12,7 +12,7 @@ const DEFAULT_CATEGORIES = {
 };
 const ICONS = {
   home:'⌂', history:'◷', insights:'◒', settings:'⚙', lock:'<svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="10" width="12" height="10" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M8.5 10V7.4a3.5 3.5 0 0 1 7 0V10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M12 14v2.2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>', eye:'◉', plus:'＋', arrow:'→',
-  income:'↙', expense:'↗', transfer:'⇄', wallet:'▣', goal:'◎', repeat:'↻', bell:'◔', shield:'◇',
+  income:'↙', expense:'↗', transfer:'⇄', wallet:'▣', goal:'◎', repeat:'↻', bell:'◔', shield:'<svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.2 19 6v5.4c0 4.6-2.8 7.8-7 9.4-4.2-1.6-7-4.8-7-9.4V6l7-2.8Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="m9.1 12 2 2 3.9-4.1" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   search:'⌕', edit:'✎', trash:'⌫', down:'⌄', up:'⌃', check:'✓', close:'×', moon:'◐', sun:'☼'
 };
 
@@ -547,7 +547,7 @@ function applyTheme(){
 
 function navItem(tab,label,ico){return `<button data-tab="${tab}" class="${currentTab===tab?'active':''}"><span class="nav-ico">${ico}</span><span>${label}</span></button>`;}
 function appShell(content){
-  const update = updateInfo ? `<div class="update-banner"><div><strong>${esc(updateInfo.title||'New MONEYLOG update')}</strong><small>${esc((updateInfo.notes||[]).slice(0,2).join(' · '))}</small></div><button class="btn btn-primary btn-update" data-action="open-update">Update</button></div>` : '';
+  const update = updateInfo ? `<div class="update-banner"><div><span class="update-kicker">UPDATE AVAILABLE</span><strong>${esc(updateInfo.title||'New MONEYLOG update')}</strong><small>${esc((updateInfo.notes||[]).slice(0,2).join(' · '))}</small></div><button class="btn btn-primary btn-update" data-action="open-update">Update now</button></div>` : '';
   return `<div class="app-shell">
     <aside class="sidebar"><div class="brand"><div class="brand-name">MONEY<span>LOG</span></div><div class="brand-tag">PERSONAL MONEY JOURNAL</div></div>
       <nav class="nav">${navItem('home','Home',ICONS.home)}${navItem('history','History',ICONS.history)}${navItem('insights','Insights',ICONS.insights)}${navItem('settings','Settings',ICONS.settings)}</nav>
@@ -667,7 +667,7 @@ function settingsView(){
   return `<div class="topbar"><div><div class="kicker">YOUR CONTROL CENTER</div><h1 class="page-title">Settings</h1></div><div class="top-actions"><button class="btn btn-ghost btn-icon top-lock" data-action="lock" aria-label="Lock MONEYLOG" title="Lock MONEYLOG"><span class="top-lock-circle">${ICONS.lock}</span></button></div></div>
   <div class="grid grid-2"><div class="card"><div class="section-head"><div><h2>Privacy & security</h2><span class="mini">Local-only controls</span></div><span class="pill">${ICONS.shield} Private</span></div><div class="setting-list"><div class="setting"><div><div class="setting-title">Hide amounts</div><div class="setting-desc">Mask monetary values on the dashboard.</div></div><label class="switch"><input id="setting-hide" type="checkbox" ${s.hideAmounts?'checked':''}><span class="slider"></span></label></div><div class="setting"><div><div class="setting-title">Auto-lock</div><div class="setting-desc">Lock after inactivity.</div></div><select class="select" id="setting-autolock" style="width:auto"><option value="5" ${s.autoLock==='5'?'selected':''}>5 min</option><option value="15" ${s.autoLock==='15'?'selected':''}>15 min</option><option value="30" ${s.autoLock==='30'?'selected':''}>30 min</option><option value="0" ${s.autoLock==='0'?'selected':''}>Never</option></select></div><div class="setting"><div><div class="setting-title">Change password</div><div class="setting-desc">Re-encrypt the vault with a new password.</div></div><button class="btn btn-soft" data-action="change-password">Change</button></div><div class="setting"><div><div class="setting-title">Lock MONEYLOG</div><div class="setting-desc">Close the current decrypted session.</div></div><button class="btn btn-ghost" data-action="lock">Lock</button></div></div></div>
   <div class="card"><div class="section-head"><div><h2>Daily journal reminder</h2><span class="mini">A gentle nudge to record today's money.</span></div><span class="pill">${ICONS.bell} Reminder</span></div><div class="setting"><div><div class="setting-title">Daily reminder</div><div class="setting-desc">Notifications are optional and controlled by your device.</div></div><label class="switch"><input id="setting-reminder" type="checkbox" ${s.reminderEnabled?'checked':''}><span class="slider"></span></label></div><div class="form-grid two"><div class="field"><label>Reminder time</label><input id="setting-reminder-time" class="input" type="time" value="${esc(s.reminderTime)}"></div><div class="field"><label>Status</label><div class="install-hint" id="reminder-status">${esc(reminderStatusText())}</div></div></div><div class="mini" style="margin-top:10px">Best-effort background delivery depends on browser support. When background scheduling is unavailable, MONEYLOG also checks while the app is active.</div></div></div>
-  <div class="card section data-shield-card"><div class="section-head"><div><h2>Data Shield</h2><span class="mini">Three layers: persistent storage, a safe local copy, and an encrypted file outside browser storage.</span></div><span class="pill">${storageProtectionStatus.backup?'Protected':'Needs backup'}</span></div><div class="shield-grid"><div><strong>${storageProtectionStatus.backup?'Protected backup connected':'Protect your vault before you need it'}</strong><p class="muted">${storageProtectionStatus.backup?`MONEYLOG can update <b>${esc(storageProtectionStatus.backupName||'moneylog-vault.moneylog')}</b> automatically after changes.`:'The local recovery copy helps with corrupted writes. Only the protected .moneylog file gives you a recovery path outside browser site storage.'}</p><div class="shield-status"><span class="status-dot ${storageProtectionStatus.backup?'good':''}"></span>${storageProtectionStatus.backup?'Automatic external backup is active.':storageProtectionStatus.persistent?'Persistent storage is active, but an external backup is still recommended.':'Browser storage is best-effort. Set up an external backup.'}</div></div><div class="safety-checks"><div class="safety-check"><strong>1</strong> Encrypted vault</div><div class="safety-check"><strong>2</strong> Previous safe copy</div><div class="safety-check"><strong>3</strong> External recovery</div></div></div><div class="shield-actions"><button class="btn btn-primary" data-action="setup-data-shield">${storageProtectionStatus.backup?'Replace protected file':'Protect my data'}</button><button class="btn btn-ghost" data-action="export-backup">Download backup</button>${storageProtectionStatus.backup?'<button class="btn btn-ghost" data-action="connect-protected">Reconnect file</button>':''}</div></div></div>
+  <div class="card section data-shield-card"><div class="section-head shield-head"><div><div class="shield-heading"><span class="shield-heading-icon">${ICONS.shield}</span><div><h2>Data Shield</h2><span class="mini">Extra protection for a vault that matters.</span></div></div></div><span class="shield-badge ${storageProtectionStatus.backup?'is-safe':''}"><span class="status-dot ${storageProtectionStatus.backup?'good':''}"></span>${storageProtectionStatus.backup?'Protected':'Needs setup'}</span></div><div class="shield-grid"><div class="shield-copy"><strong>${storageProtectionStatus.backup?'Protected recovery file connected':'Protect your vault before you need it'}</strong><p class="muted">${storageProtectionStatus.backup?`MONEYLOG updates <b>${esc(storageProtectionStatus.backupName||'moneylog-vault.moneylog')}</b> after changes while the app is open.`:'Browser storage can be cleared. Data Shield adds a previous safe copy, persistent storage where supported, and an encrypted .moneylog recovery file outside the browser.'}</p><div class="safety-checks"><span class="safety-check"><strong>01</strong><span>Encrypted vault</span></span><span class="safety-check"><strong>02</strong><span>Safe local copy</span></span><span class="safety-check"><strong>03</strong><span>External recovery</span></span></div></div><div class="shield-actions"><button class="btn btn-primary" data-action="setup-data-shield">${storageProtectionStatus.backup?'Replace protected file':'Protect my data'}</button><button class="btn btn-soft" data-action="export-backup">Download backup</button>${storageProtectionStatus.backup?'<button class="btn btn-ghost" data-action="connect-protected">Reconnect file</button>':''}</div></div><div class="shield-status"><span class="status-dot ${storageProtectionStatus.backup?'good':''}"></span>${storageProtectionStatus.backup?'Automatic external recovery is active.':storageProtectionStatus.persistent?'Persistent storage is active. External recovery is still recommended.':'Browser storage is best-effort. Set up external recovery.'}</div></div>
   <div class="card section"><div class="section-head"><div><h2>Local profile</h2><span class="mini">Stored only on this device.</span></div><span class="pill">${esc(state.settings.username||'Local user')}</span></div><p class="muted">Your username is used to verify the correct vault during sign-in and password recovery. It is not an online account.</p></div><div class="card section"><div class="section-head"><div><h2>Appearance</h2><span class="mini">Comfortable in light or dark environments.</span></div></div><div class="choice-row">${['system','light','dark'].map(x=>`<button class="choice ${s.theme===x?'active':''}" data-action="theme" data-theme="${x}">${x==='system'?'System':x==='light'?ICONS.sun+' Light':ICONS.moon+' Dark'}</button>`).join('')}</div></div>
   <div class="card section"><div class="section-head"><div><h2>Money format</h2><span class="mini">One base currency throughout the app.</span></div></div><div class="form-grid two"><div class="field"><label>Currency</label><select id="setting-currency" class="select">${Object.entries(CURRENCIES).map(([k,v])=>`<option value="${k}" ${s.currency===k?'selected':''}>${esc(k)} · ${esc(v)}</option>`).join('')}</select></div><div class="field"><label>Backup</label><button class="btn btn-soft" data-action="export-backup">Export encrypted backup</button></div></div><div class="form-grid two" style="margin-top:12px"><div class="field"><label>Restore</label><input id="restore-file" class="input" type="file" accept=".moneylog,application/octet-stream"></div><div class="field"><label>Install</label>${isInstalledWebApp()?'<div class="installed-status">MONEYLOG is installed as a Web App.</div>':'<button class="btn btn-ghost" data-action="install">Add MONEYLOG to home screen</button>'}</div></div></div>
   <div class="grid grid-2 section"><div class="card"><div class="section-head"><div><h2>Accounts</h2><span class="mini">Cash, bank, savings and more.</span></div><button class="btn btn-primary" data-action="add-account">Add</button></div><div class="list">${state.accounts.map(a=>`<div class="list-row"><span class="avatar">${ICONS.wallet}</span><span class="grow"><strong>${esc(a.name)}</strong><span class="account-meta"><small>${esc(a.type)}</small>${a.archived?'<span class="pill">Archived</span>':''}</span></span><strong class="money">${esc(formatMoney(balanceForAccount(a.id)))}</strong><button class="btn btn-ghost btn-icon" data-action="edit-account" data-id="${esc(a.id)}">${ICONS.edit}</button></div>`).join('')}</div></div>
@@ -675,7 +675,7 @@ function settingsView(){
   <div class="grid grid-2 section"><div class="card"><div class="section-head"><div><h2>Categories</h2><span class="mini">Custom categories stay in history when archived.</span></div><button class="btn btn-soft" data-action="add-category">Add</button></div><div class="choice-row">${state.categories.expense.filter(c=>!c.archived).map(c=>`<button class="choice" data-action="edit-category" data-id="${esc(c.id)}" data-type="expense">${esc(c.name)}</button>`).join('')}</div><div style="height:10px"></div><div class="choice-row">${state.categories.income.filter(c=>!c.archived).map(c=>`<button class="choice" data-action="edit-category" data-id="${esc(c.id)}" data-type="income">${esc(c.name)}</button>`).join('')}</div></div>
   <div class="card"><div class="section-head"><div><h2>Recurring entries</h2><span class="mini">Generated safely when MONEYLOG is opened.</span></div><button class="btn btn-soft" data-action="add-recurring">Add</button></div>${recurringDue.length?`<div class="list">${recurringDue.map(r=>`<div class="list-row"><span class="avatar">${ICONS.repeat}</span><span class="grow"><strong>${esc(r.name||r.categoryName||'Recurring')}</strong><small>${esc(r.frequency)} · next ${esc(r.nextDate)}</small></span><span class="money ${r.type==='income'?'positive':'negative'}">${esc(signedMoney(r.amountMinor,r.type))}</span><button class="btn btn-ghost btn-icon" data-action="edit-recurring" data-id="${esc(r.id)}">${ICONS.edit}</button></div>`).join('')}</div>`:`<div class="empty">No recurring entries yet.</div>`}</div></div>
   <div class="card section"><div class="section-head"><div><h2>Savings goals</h2><span class="mini">Planning progress; contributions do not move account balances automatically.</span></div><button class="btn btn-soft" data-action="add-goal">Add goal</button></div>${state.goals.length?`<div class="goal-grid">${state.goals.map(g=>goalCard(g)).join('')}</div>`:`<div class="empty">Create a goal such as “Emergency fund” or “New laptop”.</div>`}</div>
-  <div class="card section"><div class="section-head"><div><h2>App updates</h2><span class="mini">Updates are checked quietly in the background when you are online.</span></div><span class="pill">v${APP_VERSION}</span></div><div class="row" style="justify-content:space-between"><span class="muted">${updateInfo?`Version ${esc(updateInfo.version)} is ready to install.`:'You are on the latest published version.'}</span><button class="btn btn-soft" data-action="check-update">Check now</button></div></div>
+  <div class="card section"><div class="section-head"><div><h2>App updates</h2><span class="mini">Updates are checked quietly in the background when you are online.</span></div><span class="pill">v${APP_VERSION}</span></div><div class="row" style="justify-content:space-between"><span class="muted">${updateInfo?`Version ${esc(updateInfo.version)} is ready to install.`:'You are on the latest published version.'}</span><button class="btn btn-soft update-check-btn" data-action="check-update">Check now</button></div></div>
   <div class="card section developer-card"><div class="section-head"><div><h2>About MONEYLOG</h2><span class="mini">A private personal money journal.</span></div><span class="pill">v${APP_VERSION}</span></div><p class="muted">MONEYLOG is designed to make everyday money tracking simple: record income, expenses and transfers, understand where your money goes, and keep your records under your control.</p><div class="about-summary"><div><strong>Local first</strong><small>Your financial records stay on this device unless you export them.</small></div><div><strong>Encrypted</strong><small>Your vault and .moneylog backups are protected with authenticated encryption.</small></div><div><strong>Simple by design</strong><small>No banking, payments, ads, analytics, or complicated accounting workflows.</small></div></div><div class="developer-footer"><div><strong>Made with <span class="heart">♥</span> by nashihab</strong><small>Building small tools with care.</small></div><a class="btn btn-primary" href="https://nashihab.github.io" target="_blank" rel="noopener">Connect with the developer ↗</a></div></div>
   <div class="card section" style="border-color:color-mix(in srgb,var(--expense) 22%,var(--line))"><div class="section-head"><div><h2>Danger zone</h2><span class="mini">These actions are destructive.</span></div></div><div class="row" style="justify-content:space-between;gap:10px;flex-wrap:wrap"><span class="muted">Delete the local vault only when you intentionally want to start over. Browser cache/site-data cleanup can also remove local browser storage; use the .moneylog file for durable backup.</span><button class="btn btn-danger" data-action="wipe-data">Delete all data</button></div></div>`;
 }
@@ -866,49 +866,72 @@ async function checkForUpdate(force=false){
 }
 function openUpdateModal(){
   if(!updateInfo||$('#modal-root').dataset.open)return;
-  modal(updateInfo.title||'MONEYLOG update',`<p class="update-lead">A newer MONEYLOG version <strong>${esc(updateInfo.version)}</strong> is ready.</p><div class="update-notes">${(updateInfo.notes||[]).map(n=>`<div><span>${ICONS.check}</span>${esc(n)}</div>`).join('')}</div><div class="modal-actions"><button class="btn btn-ghost" data-action="remind-update">Remind me later</button><button class="btn btn-primary" data-action="apply-update">Update smoothly</button></div>`);
+  modal(updateInfo.title||'MONEYLOG update',`<p class="update-lead">A newer MONEYLOG version <strong>${esc(updateInfo.version)}</strong> is ready.</p><div class="update-notes">${(updateInfo.notes||[]).map(n=>`<div><span>${ICONS.check}</span>${esc(n)}</div>`).join('')}</div><div class="modal-actions"><button class="btn btn-ghost" data-action="remind-update">Remind me later</button><button class="btn btn-primary" data-action="apply-update">Update now</button></div>`);
 }
 function showUpdateProgress(){
   if(updateUiOpen)return;updateUiOpen=true;
-  modal('Updating MONEYLOG',`<div class="update-progress"><div class="update-spinner"></div><strong id="update-progress-title">Preparing the new version…</strong><span id="update-progress-copy">Your encrypted vault stays in local storage. MONEYLOG will reopen after the new app shell is active.</span><div class="update-steps"><span class="active">Prepare</span><span>Install</span><span>Reload</span></div></div>`,{wide:false});
+  modal('Updating MONEYLOG',`<div class="update-progress"><div class="update-spinner"></div><strong id="update-progress-title">Preparing update…</strong><span id="update-progress-copy">Refreshing the app shell before switching versions.</span><div class="update-steps"><span class="active">Prepare</span><span>Install</span><span>Reload</span></div></div>`,{wide:false});
 }
 function updateProgress(title,copy,step=0){$('#update-progress-title')?.replaceChildren(document.createTextNode(title));$('#update-progress-copy')?.replaceChildren(document.createTextNode(copy));$$('.update-steps span').forEach((el,i)=>el.classList.toggle('active',i<=step));}
+function waitForControllerChange(timeout=12000){
+  return new Promise(resolve=>{
+    let done=false;
+    const finish=changed=>{if(done)return;done=true;navigator.serviceWorker.removeEventListener('controllerchange',onChange);clearTimeout(timer);resolve(changed);};
+    const onChange=()=>finish(true);
+    const timer=setTimeout(()=>finish(false),timeout);
+    navigator.serviceWorker.addEventListener('controllerchange',onChange,{once:true});
+  });
+}
+async function waitForWorkerInstalled(worker,timeout=15000){
+  if(!worker)return false;
+  if(worker.state==='installed' || worker.state==='activated')return true;
+  return new Promise(resolve=>{
+    let settled=false;
+    const timer=setTimeout(()=>{if(settled)return;settled=true;worker.removeEventListener('statechange',onState);resolve(false);},timeout);
+    const onState=()=>{if(worker.state==='installed'||worker.state==='activated'){if(settled)return;settled=true;clearTimeout(timer);worker.removeEventListener('statechange',onState);resolve(true);}else if(worker.state==='redundant'){if(settled)return;settled=true;clearTimeout(timer);worker.removeEventListener('statechange',onState);resolve(false);}};
+    worker.addEventListener('statechange',onState);
+  });
+}
 async function applyUpdate(){
   if(updateReloadPending)return;
   updateReloadPending=true;
+  const target=updateInfo?.version||'';
+  try{localStorage.setItem('moneylog-pending-update',target);}catch{}
   showUpdateProgress();
   try{
-    const reg=await navigator.serviceWorker.ready;
-    updateProgress('Checking the new app shell…','MONEYLOG is refreshing its offline files before switching versions.',0);
+    const reg=await navigator.serviceWorker.getRegistration() || await navigator.serviceWorker.register('./sw.js',{updateViaCache:'none'});
+    updateProgress('Checking the new app shell…','Contacting the service worker without touching your financial records.',0);
     await reg.update();
-    const waiting=reg.waiting;
-    const installing=reg.installing;
-    const activate=worker=>worker?.postMessage({type:'SKIP_WAITING'});
-    if(waiting){
-      updateProgress('Installing the update…','The new files are ready. Switching without changing your financial records.',1);
-      activate(waiting);
-      return;
+    let worker=reg.waiting;
+    if(!worker && reg.installing){
+      updateProgress('Installing the update…','Downloading the new app files now.',1);
+      await waitForWorkerInstalled(reg.installing);
+      worker=reg.waiting||reg.installing;
     }
-    if(installing){
-      updateProgress('Installing the update…','Downloading the new app shell in the background.',1);
-      installing.addEventListener('statechange',()=>{
-        if(installing.state==='installed') activate(installing);
-      },{once:true});
-      return;
+    if(worker){
+      updateProgress('Installing the update…','Switching the app shell once the new files are ready.',1);
+      const controllerChange=waitForControllerChange();
+      worker.postMessage({type:'SKIP_WAITING'});
+      const changed=await controllerChange;
+      if(!changed && navigator.serviceWorker.controller!==worker){throw new Error('UPDATE_CONTROL_TIMEOUT');}
     }
-    updateProgress('Finishing up…','Restarting MONEYLOG with the latest files.',2);
-    setTimeout(()=>location.reload(),450);
-  }catch{
-    updateProgress('Finishing up…','The browser could not complete the background handoff, so MONEYLOG will reopen cleanly.',2);
-    setTimeout(()=>location.reload(),650);
+    updateProgress('Reloading MONEYLOG…','Opening the new version now.',2);
+    await sleep(250);
+    location.reload();
+  }catch(err){
+    console.error(err);
+    updateReloadPending=false;
+    try{localStorage.removeItem('moneylog-pending-update');}catch{}
+    updateProgress('Update could not finish','Your current vault is still intact. Try Update now again when you are online.',0);
+    setTimeout(()=>{closeModal();updateUiOpen=false;showToast('The update could not be completed. Your data is still safe.');},1200);
   }
 }
 async function registerSW(){
   if(!('serviceWorker' in navigator))return;
   try{
-    const reg=await navigator.serviceWorker.register('./sw.js');
-    navigator.serviceWorker.addEventListener('controllerchange',()=>{if(updateReloadPending){updateProgress('Update complete','Reopening MONEYLOG with the new version.',2);setTimeout(()=>location.reload(),180);}});
-    if(reg.waiting&&navigator.serviceWorker.controller) updateInfo=updateInfo||null;
+    await navigator.serviceWorker.register('./sw.js',{updateViaCache:'none'});
+    const pending=localStorage.getItem('moneylog-pending-update');
+    if(pending && pending===APP_VERSION) localStorage.removeItem('moneylog-pending-update');
   }catch{}
 }
 

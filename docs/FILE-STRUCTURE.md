@@ -1,17 +1,25 @@
-# MONEYLOG file structure
+# MONEYLOG File Structure
 
-MONEYLOG is a static PWA, so the GitHub Pages entry points stay at the project root. Runtime assets are grouped under `assets/`.
+The repository is organized so GitHub Pages can deploy it directly without a build step.
 
-- `index.html` - app entry point
-- `manifest.json` - install metadata
-- `sw.js` - offline cache and update handoff
-- `version.json` - published release information
-- `assets/app.js` - application logic and storage
-- `assets/styles.css` - UI styling
-- `assets/icon.svg` - vector application icon
-- `assets/icon-192.png` - install icon
-- `assets/icon-512.png` - install and splash icon
-- `docs/` - project documentation
-- `README.md` - GitHub project overview
+```text
+MONEYLOG/
+├── index.html          Application entry point
+├── manifest.json       PWA manifest
+├── sw.js               Service worker and offline cache
+├── version.json        Public release metadata used by update checks
+├── README.md           Project documentation
+├── LICENSE             Source-available usage terms
+├── assets/
+│   ├── app.js          Application logic and state handling
+│   ├── styles.css      Application UI styles
+│   ├── icon.svg        Vector app icon
+│   ├── icon-192.png    PWA installation icon
+│   └── icon-512.png    PWA installation icon
+└── docs/
+    ├── DATA-PROTECTION.md
+    └── FILE-STRUCTURE.md
+```
 
-User backup files are not stored in the repository. Keep your `.moneylog` recovery file outside the browser and outside the project folder.
+Do not move `index.html`, `manifest.json`, `sw.js`, or `version.json` away from the root
+without also changing deployment paths and the service-worker scope.

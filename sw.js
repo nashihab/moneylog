@@ -1,13 +1,23 @@
-const CACHE_VERSION='moneylog-cache-2.3.1';
+const CACHE_VERSION='moneylog-cache-2.4.0';
 const CORE=['./','./index.html','./manifest.json','./version.json','./assets/styles.css','./assets/app.js','./assets/icon.svg','./assets/icon-192.png','./assets/icon-512.png'];
-self.addEventListener('install',event=>event.waitUntil(caches.open(CACHE_VERSION).then(c=>c.addAll(CORE))));
-self.addEventListener('activate',event=>event.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k!==CACHE_VERSION).map(k=>caches.delete(k)))).then(()=>self.clients.claim())));
+self.addEventListener('install',event=>event.waitUntil((async()=>{
+  const cache=await caches.open(CACHE_VERSION);
+  await Promise.all(CORE.map(url=>cache.add(new Request(url,{cache:'reload'}))));
+})()));
+self.addEventListener('activate',event=>event.waitUntil((async()=>{
+  const keys=await caches.keys();
+  await Promise.all(keys.filter(k=>k!==CACHE_VERSION).map(k=>caches.delete(k)));
+  await self.clients.claim();
+})()));
 self.addEventListener('message',event=>{if(event.data?.type==='SKIP_WAITING')self.skipWaiting();});
 self.addEventListener('fetch',event=>{
   const url=new URL(event.request.url);
   if(event.request.method!=='GET')return;
   if(url.pathname.endsWith('/version.json')){event.respondWith(fetch(event.request,{cache:'no-store'}).catch(()=>caches.match('./version.json')));return;}
-  event.respondWith(caches.match(event.request).then(cached=>cached||fetch(event.request).then(response=>{if(response.ok&&url.origin===location.origin){const clone=response.clone();caches.open(CACHE_VERSION).then(c=>c.put(event.request,clone));}return response;}).catch(()=>caches.match('./index.html'))));
+  event.respondWith(caches.match(event.request).then(cached=>cached||fetch(event.request).then(response=>{
+    if(response.ok&&url.origin===location.origin){const clone=response.clone();caches.open(CACHE_VERSION).then(c=>c.put(event.request,clone)).catch(()=>{});}
+    return response;
+  }).catch(()=>caches.match('./index.html'))));
 });
 self.addEventListener('notificationclick',event=>{event.notification.close();event.waitUntil(clients.matchAll({type:'window',includeUncontrolled:true}).then(list=>{for(const client of list){if('focus'in client)return client.focus();}if(clients.openWindow)return clients.openWindow('./');}));});
 self.addEventListener('periodicsync',event=>{if(event.tag!=='moneylog-daily-reminder')return;event.waitUntil((async()=>{
