@@ -1,5 +1,5 @@
 /* MONEYLOG PWA — local-first encrypted personal finance journal */
-const APP_VERSION = '2.1.0';
+const APP_VERSION = '2.1.1';
 const UPDATE_MANIFEST_URL = './version.json';
 const DB_NAME = 'moneylog-secure-v2';
 const DB_VERSION = 1;
@@ -203,18 +203,23 @@ function defaultState(){
   };
 }
 function normalizeAccounts(accounts,transactions,settings){
-  const list=Array.isArray(accounts)?accounts.map(a=>({...a,id:a.id||uuid(),name:String(a.name||'').trim()||'Account',openingMinor:Number(a.openingMinor||0)})):[];
-  const removed=new Set();
-  for(let i=0;i<list.length;i++){
-    const a=list[i]; if(removed.has(a.id)) continue;
-    for(let j=i+1;j<list.length;j++){
-      const b=list[j]; if(removed.has(b.id)) continue;
-      if(a.name.toLowerCase()==='cash' && b.name.toLowerCase()==='cash' && a.type===b.type && Number(b.openingMinor||0)===0 && !(transactions||[]).some(t=>t.accountId===b.id||t.toAccountId===b.id)){removed.add(b.id);}
+  const list=Array.isArray(accounts)?accounts.map(a=>({...a,id:a.id||uuid(),name:String(a.name||'').trim()||'Account',type:String(a.type||'Account'),openingMinor:Number(a.openingMinor||0)})):[];
+  const canonicalByKey=new Map(), removedMap=new Map(), filtered=[];
+  for(const account of list){
+    const key=`${account.name.toLowerCase()}|${String(account.type).toLowerCase()}`;
+    const existing=canonicalByKey.get(key);
+    if(existing && account.name.toLowerCase()==='cash'){
+      // Keep one canonical Cash account and merge any accidental duplicate references into it.
+      existing.openingMinor += Number(account.openingMinor||0);
+      removedMap.set(account.id,existing.id);
+    }else{
+      canonicalByKey.set(key,account);
+      filtered.push(account);
     }
   }
-  const filtered=list.filter(a=>!removed.has(a.id));
-  for(const t of transactions||[]){if(removed.has(t.accountId))t.accountId=filtered.find(a=>a.name.toLowerCase()==='cash')?.id||filtered[0]?.id||'';if(removed.has(t.toAccountId))t.toAccountId=filtered.find(a=>a.name.toLowerCase()==='cash')?.id||filtered[0]?.id||'';}
-  if(settings&&removed.has(settings.defaultAccountId))settings.defaultAccountId=filtered.find(a=>!a.archived)?.id||filtered[0]?.id||null;
+  const remap=id=>removedMap.get(id)||id;
+  for(const t of transactions||[]){t.accountId=remap(t.accountId);t.toAccountId=remap(t.toAccountId);}
+  if(settings?.defaultAccountId)settings.defaultAccountId=remap(settings.defaultAccountId);
   return filtered.length?filtered:[{id:uuid(),name:'Cash',type:'Cash',openingMinor:0,description:'',archived:false}];
 }
 
@@ -362,7 +367,7 @@ function homeView(){
   const hide=state.settings.hideAmounts;
   const accDefault=state.settings.defaultAccountId||activeAccounts[0]?.id;
   return `<div class="topbar"><div><div class="kicker">${greeting()}</div><h1 class="page-title">Your money, clearly.</h1></div><div class="top-actions"><button class="btn btn-soft optional" data-action="quick-income">${ICONS.income} Income</button><button class="btn btn-primary" data-action="add">${ICONS.plus} Add</button></div></div>
-  <section class="hero"><div class="hero-row"><div><div class="kicker label">TOTAL AVAILABLE</div><div class="hero-amount">${hide?'••••••••':esc(formatMoney(totalBalance()))}</div><small class="label">Across ${activeAccounts.length} active account${activeAccounts.length===1?'':'s'}</small></div><button class="btn btn-soft" data-action="toggle-hide">${ICONS.eye} ${hide?'Show':'Hide'}</button></div></section>
+  <section class="hero"><div class="hero-row"><div><div class="kicker label">TOTAL AVAILABLE</div><div class="hero-amount">${hide?'••••••••':esc(formatMoney(totalBalance()))}</div><small class="label">Across ${activeAccounts.length} active account${activeAccounts.length===1?'':'s'}</small><div class="hero-date">Today · ${esc(fmtDate(todayISO()))}</div></div><button class="btn btn-soft" data-action="toggle-hide">${ICONS.eye} ${hide?'Show':'Hide'}</button></div></section>
   <div class="grid grid-4 section"><div class="card stat"><div class="label">THIS MONTH · IN</div><strong class="income">${hide?'••••':esc(formatMoney(totals.income,true))}</strong></div><div class="card stat"><div class="label">THIS MONTH · OUT</div><strong class="expense">${hide?'••••':esc(formatMoney(totals.expense,true))}</strong></div><div class="card stat"><div class="label">NET FLOW</div><strong class="${totals.income-totals.expense>=0?'income':'expense'}">${hide?'••••':esc(formatMoney(totals.income-totals.expense,true))}</strong></div><div class="card stat"><div class="label">BUDGET LEFT</div><strong>${hide?'••••':remaining===null?'—':esc(formatMoney(remaining,true))}</strong></div></div>
   <div class="section"><div class="section-head"><h2>Quick add</h2><span class="mini">Few taps. Done.</span></div><div class="quick-grid"><button class="quick" data-action="quick-expense"><span class="qicon expense">${ICONS.expense}</span><span><strong>Expense</strong><small>Food, transport, bills…</small></span></button><button class="quick" data-action="quick-income"><span class="qicon income">${ICONS.income}</span><span><strong>Income</strong><small>Salary, freelance…</small></span></button><button class="quick" data-action="quick-transfer"><span class="qicon">${ICONS.transfer}</span><span><strong>Transfer</strong><small>Move between accounts</small></span></button></div></div>
   <div class="section"><div class="section-head"><h2>Recent activity</h2><button class="btn btn-ghost" data-tab="history">See all ${ICONS.arrow}</button></div><div class="card">${latest.length?`<div class="list">${latest.map(transactionRow).join('')}</div>`:`<div class="empty"><strong>Your journal starts here.</strong>Add your first expense or income and MONEYLOG will handle the math.</div>`}</div></div>
@@ -414,6 +419,7 @@ function settingsView(){
   <div class="card"><div class="section-head"><div><h2>Recurring entries</h2><span class="mini">Generated safely when MONEYLOG is opened.</span></div><button class="btn btn-soft" data-action="add-recurring">Add</button></div>${recurringDue.length?`<div class="list">${recurringDue.map(r=>`<div class="list-row"><span class="avatar">${ICONS.repeat}</span><span class="grow"><strong>${esc(r.name||r.categoryName||'Recurring')}</strong><small>${esc(r.frequency)} · next ${esc(r.nextDate)}</small></span><span class="money ${r.type==='income'?'positive':'negative'}">${esc(signedMoney(r.amountMinor,r.type))}</span><button class="btn btn-ghost btn-icon" data-action="edit-recurring" data-id="${esc(r.id)}">${ICONS.edit}</button></div>`).join('')}</div>`:`<div class="empty">No recurring entries yet.</div>`}</div></div>
   <div class="card section"><div class="section-head"><div><h2>Savings goals</h2><span class="mini">Planning progress; contributions do not move account balances automatically.</span></div><button class="btn btn-soft" data-action="add-goal">Add goal</button></div>${state.goals.length?`<div class="goal-grid">${state.goals.map(g=>goalCard(g)).join('')}</div>`:`<div class="empty">Create a goal such as “Emergency fund” or “New laptop”.</div>`}</div>
   <div class="card section"><div class="section-head"><div><h2>App updates</h2><span class="mini">MONEYLOG checks its published version when online.</span></div><span class="pill">v${APP_VERSION}</span></div><div class="row" style="justify-content:space-between"><span class="muted">${updateInfo?`New version ${esc(updateInfo.version)} is available.`:'You are up to date.'}</span><button class="btn btn-soft" data-action="check-update">Check now</button></div></div>
+  <div class="card section developer-card"><div class="section-head"><div><h2>About MONEYLOG</h2><span class="mini">A private personal money journal.</span></div><span class="pill">v${APP_VERSION}</span></div><p class="muted">MONEYLOG is designed to make everyday money tracking simple: record income, expenses and transfers, understand where your money goes, and keep your records under your control.</p><div class="about-summary"><div><strong>Local first</strong><small>Your financial records stay on this device unless you export them.</small></div><div><strong>Encrypted</strong><small>Your vault and .moneylog backups are protected with authenticated encryption.</small></div><div><strong>Simple by design</strong><small>No banking, payments, ads, analytics, or complicated accounting workflows.</small></div></div><div class="developer-footer"><div><strong>Made with <span class="heart">♥</span> by nashihab</strong><small>Building small tools with care.</small></div><a class="btn btn-primary" href="https://nashihab.github.io" target="_blank" rel="noopener">Connect with the developer ↗</a></div></div>
   <div class="card section" style="border-color:color-mix(in srgb,var(--expense) 22%,var(--line))"><div class="section-head"><div><h2>Danger zone</h2><span class="mini">These actions are destructive.</span></div></div><div class="row" style="justify-content:space-between;gap:10px;flex-wrap:wrap"><span class="muted">Delete the local vault only when you intentionally want to start over. Browser cache/site-data cleanup can also remove local browser storage; use the .moneylog file for durable backup.</span><button class="btn btn-danger" data-action="wipe-data">Delete all data</button></div></div>`;
 }
 function greeting(){const h=new Date().getHours();return h<5?'LATE NIGHT':h<12?'GOOD MORNING':h<18?'GOOD AFTERNOON':'GOOD EVENING';}
@@ -562,9 +568,21 @@ async function saveDurableBackup(){
 }
 function maybeShowInstallChoice(){
   if(localStorage.getItem('moneylog-entry-choice'))return;
-  setTimeout(()=>{if($('#modal-root').dataset.open)return;modal('How would you like to use MONEYLOG?',`<p class="muted">For the best experience, install MONEYLOG as a web app. The installed version keeps its app shell separate from ordinary browsing.</p><div class="install-choice-grid"><button class="install-option" data-action="install-choice" data-choice="install"><span class="install-option-icon">↓</span><span><strong>Install Web App</strong><small>Best choice for daily use</small></span></button><button class="install-option" data-action="install-choice" data-choice="web"><span class="install-option-icon">↗</span><span><strong>Use Web Version</strong><small>Runs inside your browser</small></span></button></div><div class="web-warning"><strong>Web version warning</strong><br>Browser cleanup, clearing site data, or uninstalling browser data can remove MONEYLOG's local vault. Keep an encrypted <code>.moneylog</code> backup outside the browser.</div>`);},250);
+  setTimeout(()=>{if($('#modal-root').dataset.open)return;modal('Choose your MONEYLOG experience',`<p class="muted">MONEYLOG works in your browser, but the installed Web App is the recommended way to use it every day.</p><div class="install-choice-grid"><button class="install-option install-option-primary" data-action="install-choice" data-choice="install"><span class="install-option-icon">＋</span><span><strong>Install Web App</strong><small>Feels like a real app • easier to open • best daily experience</small></span></button><button class="install-option" data-action="install-choice" data-choice="web"><span class="install-option-icon">↗</span><span><strong>Use Web Version</strong><small>No installation • opens directly in the browser</small></span></button></div><div class="web-warning"><strong>Recommended: install the Web App.</strong><br>The browser version stores its vault in browser storage. Clearing site data, browser storage, or uninstalling browser data may remove it. Keep an encrypted <code>.moneylog</code> file outside the browser.</div>`);},250);
 }
-function toggleInstall(){if(deferredInstallPrompt){deferredInstallPrompt.prompt();deferredInstallPrompt=null;return;}showToast('Open your browser menu and choose “Add to Home screen”.');}
+async function toggleInstall(){
+  if(deferredInstallPrompt){
+    try{deferredInstallPrompt.prompt();const result=await deferredInstallPrompt.userChoice;if(result?.outcome==='accepted'){localStorage.setItem('moneylog-installed','1');closeModal();showToast('MONEYLOG was installed.');}else showToast('Installation cancelled. You can try again anytime.');}
+    catch{showToast('The browser could not start installation. Use your browser menu → Add to Home screen.');}
+    finally{deferredInstallPrompt=null;}
+    return;
+  }
+  installInstructions();
+}
+function installInstructions(){
+  modal('Install MONEYLOG',`<p class="muted">Your browser did not expose the one-tap install prompt yet. MONEYLOG is still installable.</p><div class="install-guide"><div class="guide-step"><strong>Chrome on Android</strong><span>Open the browser menu <b>⋮</b> and choose <b>Install app</b> or <b>Add to Home screen</b>.</span></div><div class="guide-step"><strong>Safari on iPhone</strong><span>Tap <b>Share</b> → <b>Add to Home Screen</b>.</span></div><div class="guide-step"><strong>Desktop</strong><span>Use the install icon in the browser address bar when available.</span></div></div><div class="web-warning"><strong>Why install?</strong><br>The installed Web App gets its own app-style window and is the recommended way to use MONEYLOG daily.</div><div class="modal-actions"><button class="btn btn-ghost" data-action="close-modal">Maybe later</button></div>`);
+}
+
 async function checkForUpdate(force=false){
   try{
     const last=Number(localStorage.getItem('moneylog-update-check')||0);if(!force&&Date.now()-last<15*60*1000)return;
@@ -618,8 +636,8 @@ $('#app').addEventListener('click',async e=>{
     else if(action==='change-password')changePassword();
     else if(action==='export-backup')exportBackup();
     else if(action==='export-csv')exportCSV();
-    else if(action==='install')toggleInstall();
-    else if(action==='install-choice'){localStorage.setItem('moneylog-entry-choice',el.dataset.choice);closeModal();if(el.dataset.choice==='install')toggleInstall();}
+    else if(action==='install')await toggleInstall();
+    else if(action==='install-choice'){localStorage.setItem('moneylog-entry-choice',el.dataset.choice);if(el.dataset.choice==='install')await toggleInstall();else{closeModal();showToast('Web version selected. Keep a .moneylog backup somewhere safe.');}}
     else if(action==='forgot-password')recoveryPasswordForm();
     else if(action==='save-durable-backup')saveDurableBackup();
     else if(action==='toggle-pass'){const input=$(`#${el.dataset.target}`);input.type=input.type==='password'?'text':'password';}
