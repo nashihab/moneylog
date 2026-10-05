@@ -1,5 +1,5 @@
 /* MONEYLOG PWA - local-first encrypted personal finance journal */
-const APP_VERSION = '2.3.0';
+const APP_VERSION = '2.3.1';
 const UPDATE_MANIFEST_URL = './version.json';
 const DB_NAME = 'moneylog-secure-v2';
 const DB_VERSION = 1;
@@ -20,6 +20,7 @@ let db = null;
 let sessionKey = null;
 let state = null;
 let currentTab = 'home';
+let insightsRange = 'thisMonth';
 let historyFilters = { q:'', type:'all', account:'all', category:'all', from:'', to:'' };
 let modalCloseTimer = null;
 let deferredInstallPrompt = null;
@@ -261,7 +262,6 @@ function validateState(s){
   s=s&&typeof s==='object'?s:{};
   const transactions=Array.isArray(s.transactions)?s.transactions.map(t=>({...t,id:t.id||uuid(),amountMinor:Number(t.amountMinor||0)})):[];
   const settings={...d.settings,...(s.settings||{})};
-  if(settings.theme==='system') settings.theme='light';
   const accounts=normalizeAccounts(s.accounts,transactions,settings);
   return {
     version:2,
@@ -387,8 +387,8 @@ function protectedBackupStatusLabel(){
 }
 function storageQualityStrip(){
   const online=navigator.onLine!==false;
-  const safe=storageProtectionStatus.backup||storageProtectionStatus.persistent;
-  return `<div class="quality-strip"><span class="quality-chip ${online?'is-online':'is-offline'}"><i></i>${online?'Online':'Offline-ready'}</span><span class="quality-chip ${safe?'quality-safe':'quality-risk'}"><span class="quality-icon">${ICONS.shield}</span>${esc(protectedBackupStatusLabel())}</span>${isInstalledWebApp()?'<span class="quality-chip quality-installed">Installed app</span>':''}</div>`;
+  const protectedNow=storageProtectionStatus.backup;
+  return `<div class="quality-strip"><span class="quality-chip ${online?'is-online':'is-offline'}"><i></i>${online?'Online':'Offline-ready'}</span><span class="quality-chip ${protectedNow?'quality-safe':'quality-risk'}"><span class="quality-icon">${ICONS.shield}</span>${esc(protectedBackupStatusLabel())}</span>${isInstalledWebApp()?'<span class="quality-chip quality-installed">Installed app</span>':''}</div>`;
 }
 async function saveProtectedEnvelope(handle,wrapSalt,wrappedKey){
   if(!handle||!sessionKey||!state)return false;
@@ -406,7 +406,7 @@ async function saveProtectedEnvelope(handle,wrapSalt,wrappedKey){
     const meta=await idbGet('meta','protectedBackup');
     const next={key:'protectedBackup',handle,name:handle.name||meta?.name||'moneylog-vault.moneylog',wrapSalt,wrappedKey,lastBackupAt:file.updatedAt};
     await idbPut('meta',next);
-    storageProtectionStatus={persistent:storageProtectionStatus.persistent,backup:true,backupName:next.name,lastBackupAt:next.lastBackupAt};
+    storageProtectionStatus={...storageProtectionStatus,backup:true,backupName:next.name,lastBackupAt:next.lastBackupAt};
     return true;
   }catch{return false;}
 }
@@ -424,7 +424,7 @@ async function enableProtectedBackup(){
   if(!sessionKey||!state)return;
   await requestPersistentStorage();
   if(!window.showSaveFilePicker){
-    showToast('Automatic file protection is not available in this browser. Download an encrypted .moneylog backup instead.');
+    await saveDurableBackup();
     return;
   }
   try{
@@ -464,6 +464,7 @@ async function connectProtectedFile(){
     const [handle]=await window.showOpenFilePicker({multiple:false,types:[{description:'MONEYLOG protected vault',accept:{'application/octet-stream':['.moneylog']}}]});
     const raw=JSON.parse(await (await handle.getFile()).text());
     if(raw.magic!=='MONEYLOG-PROTECTED'||raw.version!==1)throw new Error('unsupported');
+    if(!(await verifyFilePermission(handle,true)))throw new Error('permission');
     const p=prompt('Enter the password used when this protected file was created.');
     if(!p)return;
     const wrapKey=await deriveKey(p,b64ToBytes(raw.wrapSalt));
@@ -472,7 +473,7 @@ async function connectProtectedFile(){
     if(candidate.length!==current.length||candidate.some((v,i)=>v!==current[i]))throw new Error('different-vault');
     await idbPut('meta',{key:'protectedBackup',handle,name:handle.name||'moneylog-vault.moneylog',wrapSalt:raw.wrapSalt,wrappedKey:raw.wrappedKey,lastBackupAt:raw.updatedAt||new Date().toISOString()});
     await refreshStorageProtectionStatus();renderApp();showToast('Protected file reconnected. Future saves will update it automatically.');
-  }catch(err){if(err?.name==='AbortError')return;showToast(err?.message==='different-vault'?'That file belongs to a different MONEYLOG vault. Use Restore protected MONEYLOG instead.':'Could not reconnect the protected file.');}
+  }catch(err){if(err?.name==='AbortError')return;showToast(err?.message==='different-vault'?'That file belongs to a different MONEYLOG vault. Use Restore protected MONEYLOG instead.':err?.message==='permission'?'Give MONEYLOG access to that file and try again.':'Could not reconnect the protected file.');}
 }
 async function restoreProtectedBackup(file,handle=null){
   if(!file)return;
@@ -577,6 +578,7 @@ function authAccessPanel(){
 }
 
 function renderAuth(mode){
+  document.body.classList.remove('modal-open');
   document.documentElement.dataset.theme='light';
   if(mode==='setup'){
     $('#app').innerHTML=`<div class="auth"><div class="auth-card glass"><div class="auth-brand"><div class="brand-name">MONEY<span>LOG</span></div><div class="brand-tag">PERSONAL MONEY JOURNAL</div></div><h1 class="auth-title">Create your private MONEYLOG.</h1><p class="auth-copy">Set a local username, password, and recovery code. Nothing is sent to a server.</p><form id="setup-form"><div class="field"><label>Username</label><input id="setup-username" class="input" minlength="2" maxlength="40" autocomplete="username" required placeholder="Choose a local username"></div><div class="field" style="margin-top:12px"><label>Password</label><div class="password-wrap"><input id="setup-password" class="input" type="password" minlength="8" autocomplete="new-password" required placeholder="At least 8 characters"><button class="reveal" type="button" data-action="toggle-pass" data-target="setup-password">◉</button></div></div><div class="field" style="margin-top:12px"><label>Confirm password</label><input id="setup-confirm" class="input" type="password" minlength="8" autocomplete="new-password" required placeholder="Enter it again"></div><div class="field" style="margin-top:12px"><label>Recovery code</label><input id="setup-recovery" class="input" minlength="8" maxlength="64" required placeholder="Create a recovery code"></div><div class="field" style="margin-top:12px"><label>Confirm recovery code</label><input id="setup-recovery-confirm" class="input" minlength="8" maxlength="64" required placeholder="Enter it again"></div><div class="install-hint" style="margin-top:14px"><strong>Do not lose the recovery code.</strong><br>MONEYLOG cannot email it or recover it for you. It is your password-reset method.</div><button class="btn btn-primary" style="width:100%;margin-top:14px">Create MONEYLOG</button></form><button class="btn btn-ghost" id="restore-protected-entry" style="width:100%;margin-top:8px">Restore protected MONEYLOG</button><input id="protected-restore-file" class="hidden" type="file" accept=".moneylog,application/octet-stream">${authAccessPanel()}<div class="auth-footer">Made with <span>♥</span> by nashihab</div></div></div>`;
@@ -648,7 +650,7 @@ function filteredTransactions(){
   }).sort((a,b)=>b.date.localeCompare(a.date)||(b.time||'').localeCompare(a.time||''));
 }
 function insightsView(){
-  const range=dateRange('thisMonth');
+  const range=dateRange(insightsRange);
   const totals=periodTotals(range.from,range.to);
   const expenseByCat={};state.transactions.filter(t=>t.type==='expense'&&t.date>=range.from&&t.date<=range.to).forEach(t=>{const n=categoryName('expense',t.categoryId);expenseByCat[n]=(expenseByCat[n]||0)+t.amountMinor;});
   const ranked=Object.entries(expenseByCat).sort((a,b)=>b[1]-a[1]).slice(0,8);const max=ranked[0]?.[1]||1;
@@ -656,7 +658,7 @@ function insightsView(){
   const trendMax=Math.max(1,...months.map(m=>Math.max(m.income,m.expense)));
   return `<div class="topbar"><div><div class="kicker">UNDERSTAND YOUR MONEY</div><h1 class="page-title">Insights</h1></div><div class="top-actions"><select class="select" id="insight-range" style="width:auto"><option value="week">This week</option><option value="thisMonth" selected>This month</option><option value="lastMonth">Last month</option><option value="3Months">Last 3 months</option><option value="year">This year</option></select><button class="btn btn-ghost btn-icon top-lock" data-action="lock" aria-label="Lock MONEYLOG" title="Lock MONEYLOG"><span class="top-lock-circle">${ICONS.lock}</span></button></div></div>
   <div class="grid grid-3"><div class="card stat"><div class="label">INCOME</div><strong class="income">${esc(formatMoney(totals.income))}</strong><small class="muted">${esc(fmtDate(range.from))} → ${esc(fmtDate(range.to))}</small></div><div class="card stat"><div class="label">EXPENSE</div><strong class="expense">${esc(formatMoney(totals.expense))}</strong><small class="muted">Transfers excluded</small></div><div class="card stat"><div class="label">NET FLOW</div><strong class="${totals.income-totals.expense>=0?'income':'expense'}">${esc(formatMoney(totals.income-totals.expense))}</strong><small class="muted">Income minus expenses</small></div></div>
-  <div class="grid grid-2 section"><div class="card"><div class="section-head"><h2>Where it goes</h2><span class="mini">This month</span></div>${ranked.length?`<div class="chart">${ranked.map(([name,val])=>`<div class="bar-item"><span class="truncate">${esc(name)}</span><div class="bar-track"><span style="width:${val/max*100}%"></span></div><strong style="text-align:right">${esc(formatMoney(val,true))}</strong></div>`).join('')}</div>`:`<div class="empty"><strong>No expenses yet.</strong>Category insights appear after your first expense.</div>`}</div>
+  <div class="grid grid-2 section"><div class="card"><div class="section-head"><h2>Where it goes</h2><span class="mini">${insightsRange==='week'?'This week':insightsRange==='thisMonth'?'This month':insightsRange==='lastMonth'?'Last month':insightsRange==='3Months'?'Last 3 months':'This year'}</span></div>${ranked.length?`<div class="chart">${ranked.map(([name,val])=>`<div class="bar-item"><span class="truncate">${esc(name)}</span><div class="bar-track"><span style="width:${val/max*100}%"></span></div><strong style="text-align:right">${esc(formatMoney(val,true))}</strong></div>`).join('')}</div>`:`<div class="empty"><strong>No expenses yet.</strong>Category insights appear after your first expense.</div>`}</div>
   <div class="card"><div class="section-head"><h2>Six-month flow</h2><span class="mini">Income vs expense</span></div><div class="chart">${months.map(m=>`<div><div class="row" style="justify-content:space-between"><span class="mini">${esc(m.label)}</span><span class="mini">${esc(formatMoney(m.income,true))} in · ${esc(formatMoney(m.expense,true))} out</span></div><div class="progress" style="margin-top:5px"><span style="width:${m.income/trendMax*100}%;background:var(--income)"></span></div><div class="progress" style="margin-top:4px"><span style="width:${m.expense/trendMax*100}%;background:var(--expense)"></span></div></div>`).join('')}</div></div></div>
   <div class="section"><div class="section-head"><h2>Account picture</h2><span class="mini">Current balances</span></div><div class="accounts-grid">${state.accounts.map(a=>`<div class="account-card"><span class="pill">${esc(a.type)}</span><strong>${esc(a.name)}</strong>${a.archived?'<span class="account-type">Archived</span>':''}<div class="amount">${esc(formatMoney(balanceForAccount(a.id)))}</div><small class="muted">Opening ${esc(formatMoney(a.openingMinor))}</small></div>`).join('')}</div></div>`;
 }
@@ -732,8 +734,9 @@ function modal(title,body,opts={}){
   const cls=opts.wide?'modal wide':'modal';
   $('#modal-root').innerHTML=`<div class="modal-backdrop" data-modal-bg><section class="${cls}" role="dialog" aria-modal="true"><div class="modal-head"><h2>${title}</h2><button class="btn btn-ghost btn-icon" data-action="close-modal">${ICONS.close}</button></div><div class="modal-body">${body}</div></section></div>`;
   $('#modal-root').dataset.open='1';
+  document.body.classList.add('modal-open');
 }
-function closeModal(){ $('#modal-root').innerHTML=''; delete $('#modal-root').dataset.open; }
+function closeModal(){ $('#modal-root').innerHTML=''; delete $('#modal-root').dataset.open; document.body.classList.remove('modal-open'); }
 function showToast(msg){const t=$('#toast');t.textContent=msg;t.classList.add('show');clearTimeout(t._timer);t._timer=setTimeout(()=>t.classList.remove('show'),2800);}
 
 function transactionForm(existing=null,forcedType='expense'){
@@ -872,28 +875,33 @@ function showUpdateProgress(){
 function updateProgress(title,copy,step=0){$('#update-progress-title')?.replaceChildren(document.createTextNode(title));$('#update-progress-copy')?.replaceChildren(document.createTextNode(copy));$$('.update-steps span').forEach((el,i)=>el.classList.toggle('active',i<=step));}
 async function applyUpdate(){
   if(updateReloadPending)return;
-  updateReloadPending=true;showUpdateProgress();
+  updateReloadPending=true;
+  showUpdateProgress();
   try{
     const reg=await navigator.serviceWorker.ready;
     updateProgress('Checking the new app shell…','MONEYLOG is refreshing its offline files before switching versions.',0);
     await reg.update();
-    const activate=worker=>{if(!worker)return;worker.postMessage({type:'SKIP_WAITING'});};
-    if(reg.waiting){updateProgress('Installing the update…','The new files are ready. Switching without changing your financial records.',1);activate(reg.waiting);return;}
-    if(reg.installing){
-      updateProgress('Installing the update…','Downloading the new app shell in the background.',1);
-      reg.installing.addEventListener('statechange',()=>{if(reg.installing?.state==='installed'){activate(reg.installing);}});return;
+    const waiting=reg.waiting;
+    const installing=reg.installing;
+    const activate=worker=>worker?.postMessage({type:'SKIP_WAITING'});
+    if(waiting){
+      updateProgress('Installing the update…','The new files are ready. Switching without changing your financial records.',1);
+      activate(waiting);
+      return;
     }
-    updateProgress('Finishing up…','Restarting MONEYLOG with the latest files.',2);setTimeout(()=>location.reload(),500);
-  }catch{updateProgress('Finishing up…','The browser could not complete the background handoff, so MONEYLOG will reopen cleanly.',2);setTimeout(()=>location.reload(),650);}
-}
-function compareVersions(a,b){const aa=String(a||'0').split('.').map(Number),bb=String(b||'0').split('.').map(Number);for(let i=0;i<Math.max(aa.length,bb.length);i++){const x=aa[i]||0,y=bb[i]||0;if(x!==y)return x-y;}return 0;}
-async function applyUpdate(){
-  try{
-    const reg=await navigator.serviceWorker.ready;showToast('Preparing the update…');await reg.update();
-    if(reg.waiting){reg.waiting.postMessage({type:'SKIP_WAITING'});return;}
-    if(reg.installing){reg.installing.addEventListener('statechange',()=>{if(reg.installing?.state==='installed'&&navigator.serviceWorker.controller){reg.waiting?.postMessage({type:'SKIP_WAITING'});}});return;}
-    location.reload();
-  }catch{location.reload();}
+    if(installing){
+      updateProgress('Installing the update…','Downloading the new app shell in the background.',1);
+      installing.addEventListener('statechange',()=>{
+        if(installing.state==='installed') activate(installing);
+      },{once:true});
+      return;
+    }
+    updateProgress('Finishing up…','Restarting MONEYLOG with the latest files.',2);
+    setTimeout(()=>location.reload(),450);
+  }catch{
+    updateProgress('Finishing up…','The browser could not complete the background handoff, so MONEYLOG will reopen cleanly.',2);
+    setTimeout(()=>location.reload(),650);
+  }
 }
 async function registerSW(){
   if(!('serviceWorker' in navigator))return;
@@ -968,13 +976,9 @@ $('#app').addEventListener('change',async e=>{
   if(e.target.id==='restore-file'){await restoreBackup(e.target.files?.[0]);}
 });
 function renderInsightsForRange(kind){
-  // Re-render the same page with the selected range by temporarily changing helper behavior.
-  const target=dateRange(kind);const totals=periodTotals(target.from,target.to);const el=$('#insight-range');if(!el)return;
-  const root=el.closest('.content');
-  const by={};state.transactions.filter(t=>t.type==='expense'&&t.date>=target.from&&t.date<=target.to).forEach(t=>{const n=categoryName('expense',t.categoryId);by[n]=(by[n]||0)+t.amountMinor;});
-  const rank=Object.entries(by).sort((a,b)=>b[1]-a[1]).slice(0,8),max=rank[0]?.[1]||1;root.querySelector('.card .chart')?.remove();
-  // Simple refresh: use full app render. The default page remains readable and the selected range is reflected in summary after this action.
-  let html=insightsViewDynamic(kind);root.innerHTML=html;
+  insightsRange=kind||'thisMonth';
+  renderApp();
+  requestAnimationFrame(()=>$('#insight-range')?.focus());
 }
 function insightsViewDynamic(kind){
   const range=dateRange(kind),totals=periodTotals(range.from,range.to);const expenseByCat={};state.transactions.filter(t=>t.type==='expense'&&t.date>=range.from&&t.date<=range.to).forEach(t=>{const n=categoryName('expense',t.categoryId);expenseByCat[n]=(expenseByCat[n]||0)+t.amountMinor;});const ranked=Object.entries(expenseByCat).sort((a,b)=>b[1]-a[1]).slice(0,8),max=ranked[0]?.[1]||1;const months=[];const now=new Date(`${todayISO()}T00:00:00`);for(let i=5;i>=0;i--){const d=new Date(now.getFullYear(),now.getMonth()-i,1),key=d.toISOString().slice(0,7),last=new Date(d.getFullYear(),d.getMonth()+1,0).getDate();months.push({label:d.toLocaleDateString('en-BD',{month:'short'}),...periodTotals(`${key}-01`,`${key}-${last}`)});}const trendMax=Math.max(1,...months.map(m=>Math.max(m.income,m.expense)));return `<div class="topbar"><div><div class="kicker">UNDERSTAND YOUR MONEY</div><h1 class="page-title">Insights</h1></div><div class="top-actions"><select class="select" id="insight-range" style="width:auto">${['week','thisMonth','lastMonth','3Months','year'].map(x=>`<option value="${x}" ${x===kind?'selected':''}>${x==='week'?'This week':x==='thisMonth'?'This month':x==='lastMonth'?'Last month':x==='3Months'?'Last 3 months':'This year'}</option>`).join('')}</select><button class="btn btn-ghost btn-icon top-lock" data-action="lock" aria-label="Lock MONEYLOG" title="Lock MONEYLOG"><span class="top-lock-circle">${ICONS.lock}</span></button></div></div><div class="grid grid-3"><div class="card stat"><div class="label">INCOME</div><strong class="income">${esc(formatMoney(totals.income))}</strong><small class="muted">${esc(fmtDate(range.from))} → ${esc(fmtDate(range.to))}</small></div><div class="card stat"><div class="label">EXPENSE</div><strong class="expense">${esc(formatMoney(totals.expense))}</strong><small class="muted">Transfers excluded</small></div><div class="card stat"><div class="label">NET FLOW</div><strong class="${totals.income-totals.expense>=0?'income':'expense'}">${esc(formatMoney(totals.income-totals.expense))}</strong><small class="muted">Income minus expenses</small></div></div><div class="grid grid-2 section"><div class="card"><div class="section-head"><h2>Where it goes</h2><span class="mini">Selected period</span></div>${ranked.length?`<div class="chart">${ranked.map(([name,val])=>`<div class="bar-item"><span class="truncate">${esc(name)}</span><div class="bar-track"><span style="width:${val/max*100}%"></span></div><strong style="text-align:right">${esc(formatMoney(val,true))}</strong></div>`).join('')}</div>`:`<div class="empty"><strong>No expenses yet.</strong>No category spending for this period.</div>`}</div><div class="card"><div class="section-head"><h2>Six-month flow</h2><span class="mini">Context</span></div><div class="chart">${months.map(m=>`<div><div class="row" style="justify-content:space-between"><span class="mini">${esc(m.label)}</span><span class="mini">${esc(formatMoney(m.income,true))} in · ${esc(formatMoney(m.expense,true))} out</span></div><div class="progress" style="margin-top:5px"><span style="width:${m.income/trendMax*100}%;background:var(--income)"></span></div><div class="progress" style="margin-top:4px"><span style="width:${m.expense/trendMax*100}%;background:var(--expense)"></span></div></div>`).join('')}</div></div></div><div class="section"><div class="section-head"><h2>Account picture</h2></div><div class="accounts-grid">${state.accounts.map(a=>`<div class="account-card"><span class="pill">${esc(a.type)}</span><strong>${esc(a.name)}</strong>${a.archived?'<span class="account-type">Archived</span>':''}<div class="amount">${esc(formatMoney(balanceForAccount(a.id)))}</div><small class="muted">Opening ${esc(formatMoney(a.openingMinor))}</small></div>`).join('')}</div></div>`;}
@@ -1001,6 +1005,7 @@ window.addEventListener('offline',()=>{if(state)renderApp();});
 window.addEventListener('focus',()=>{if(state){checkForUpdate();checkReminderDue();}});
 
 $('#modal-root').addEventListener('click',async e=>{
+  if(e.target.matches('[data-modal-bg]')){closeModal();return;}
   const el=e.target.closest('[data-action]');
   if(!el)return;
   const action=el.dataset.action;
@@ -1022,6 +1027,7 @@ $('#modal-root').addEventListener('click',async e=>{
   }catch(err){console.error(err);showToast('Something went wrong.');}
 });
 matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change',()=>{if(state&&state.settings.theme==='system')applyTheme();});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&$('#modal-root').dataset.open)closeModal();});
 
 document.addEventListener('pointerdown',()=>{if(state)resetAutoLockTimer();},{passive:true});
 window.addEventListener('pageshow',()=>{if(state)resetAutoLockTimer();});

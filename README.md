@@ -73,12 +73,8 @@ On a browser that supports the File System Access API, use **Settings → Data S
 Updates are checked quietly online. When a new version is found, MONEYLOG shows the release notes first, installs the new service-worker cache, hands control to it, and then reloads the app once the new shell is active. Your encrypted vault is separate from the app shell.
 
 
-## 2.3.0 safety and organization
+### 2.3.1 release-candidate hardening
 
-- Added a previous encrypted vault snapshot for recovery from damaged local writes.
-- Added clearer backup health status and stronger Data Shield messaging.
-- Added Install Web App and Use Web Version controls directly to the setup and login screens.
-- Protected-file creation now chooses the file first and verifies the written file after saving.
-- Runtime assets are organized under `assets/` and supporting documentation under `docs/`.
+This release hardens responsive layout behavior across narrow phones, tablet widths, setup/login, update banners, modal sheets, and the mobile navigation area. It also fixes the update handler so the staged update flow is not shadowed by duplicate code, keeps the Insights page shell intact during range changes, and strengthens protected-file reconnect behavior.
 
-A deliberate browser/site-data wipe can still remove browser-managed storage. The protected `.moneylog` file is the recovery layer designed to survive that cleanup.
+For PWA deployment, the manifest now has a stable application ID and dedicated 192px and 512px PNG icons.

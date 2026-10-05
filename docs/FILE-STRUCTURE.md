@@ -8,7 +8,9 @@ MONEYLOG is a static PWA, so the GitHub Pages entry points stay at the project r
 - `version.json` - published release information
 - `assets/app.js` - application logic and storage
 - `assets/styles.css` - UI styling
-- `assets/icon.svg` - application icon
+- `assets/icon.svg` - vector application icon
+- `assets/icon-192.png` - install icon
+- `assets/icon-512.png` - install and splash icon
 - `docs/` - project documentation
 - `README.md` - GitHub project overview
 

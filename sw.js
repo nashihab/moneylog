@@ -1,5 +1,5 @@
-const CACHE_VERSION='moneylog-cache-2.3.0';
-const CORE=['./','./index.html','./manifest.json','./version.json','./assets/styles.css','./assets/app.js','./assets/icon.svg'];
+const CACHE_VERSION='moneylog-cache-2.3.1';
+const CORE=['./','./index.html','./manifest.json','./version.json','./assets/styles.css','./assets/app.js','./assets/icon.svg','./assets/icon-192.png','./assets/icon-512.png'];
 self.addEventListener('install',event=>event.waitUntil(caches.open(CACHE_VERSION).then(c=>c.addAll(CORE))));
 self.addEventListener('activate',event=>event.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k!==CACHE_VERSION).map(k=>caches.delete(k)))).then(()=>self.clients.claim())));
 self.addEventListener('message',event=>{if(event.data?.type==='SKIP_WAITING')self.skipWaiting();});
