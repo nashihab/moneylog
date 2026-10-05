@@ -1,14 +1,13 @@
 {
-  "version":"2.1.2",
-  "released":"2026-10-05",
-  "title":"MONEYLOG 2.1.2",
-  "notes":[
-    "Username, password and recovery-code vault setup",
-    "Install Web App or Use Web Version choice",
-    "Durable encrypted .moneylog vault file workflow",
-    "Glass UI polish and stronger dark-mode text contrast",
-    "Duplicate Cash cleanup and safer local-storage warnings",
-    "Install-flow and mobile navigation polish",
-    "Made with love by nashihab"
+  "version": "2.1.3",
+  "released": "2026-10-05",
+  "title": "MONEYLOG 2.1.3",
+  "notes": [
+    "Redesigned mobile navigation with a dedicated Add action",
+    "Lock moved to the top action area",
+    "Refresh preserves the active session until auto-lock or explicit lock",
+    "Glass surface and mobile interaction refinements",
+    "Cleaner account labels and stronger dark-mode contrast",
+    "Light theme remains the default"
   ]
 }

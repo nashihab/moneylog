@@ -49,3 +49,6 @@ MONEYLOG - Personal Money Journal
 Made with ♥ by nashihab
 
 Developer: https://nashihab.github.io
+
+## Refresh and locking
+Refreshing the app does not intentionally lock the current session. MONEYLOG restores the active encrypted session after a refresh while the selected auto-lock period has not expired. Use the Lock control when you want to end the session immediately.
