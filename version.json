@@ -1,5 +1,5 @@
 {
-  "version":"2.1.0",
+  "version":"2.1.1",
   "released":"2026-10-05",
   "title":"MONEYLOG 2.1",
   "notes":[
@@ -8,6 +8,7 @@
     "Durable encrypted .moneylog vault file workflow",
     "Glass UI polish and stronger dark-mode text contrast",
     "Duplicate Cash cleanup and safer local-storage warnings",
+    "Install-flow and mobile navigation polish",
     "Made with love by nashihab"
   ]
 }
