@@ -1,5 +1,5 @@
-const CACHE_VERSION='moneylog-cache-2.1.4';
-const CORE=['./','./index.html','./styles.css','./app.js','./manifest.json','./icon.svg','./version.json'];
+const CACHE_VERSION='moneylog-cache-2.3.0';
+const CORE=['./','./index.html','./manifest.json','./version.json','./assets/styles.css','./assets/app.js','./assets/icon.svg'];
 self.addEventListener('install',event=>event.waitUntil(caches.open(CACHE_VERSION).then(c=>c.addAll(CORE))));
 self.addEventListener('activate',event=>event.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k!==CACHE_VERSION).map(k=>caches.delete(k)))).then(()=>self.clients.claim())));
 self.addEventListener('message',event=>{if(event.data?.type==='SKIP_WAITING')self.skipWaiting();});
@@ -16,7 +16,7 @@ self.addEventListener('periodicsync',event=>{if(event.tag!=='moneylog-daily-remi
     const p=await new Promise((resolve,reject)=>{const r=d.transaction('publicPrefs','readonly').objectStore('publicPrefs').get('reminder');r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);});
     if(!p?.enabled)return;const now=new Date();const [h,m]=String(p.time||'20:30').split(':').map(Number);const mins=now.getHours()*60+now.getMinutes();if(mins<h*60+m)return;
     const today=new Date().toISOString().slice(0,10);if(p.lastReminderDate===today)return;
-    await self.registration.showNotification('MONEYLOG reminder',{body:'A quiet minute for today’s money log.',icon:'./icon.svg',tag:'moneylog-daily-reminder',data:{url:'./'}});
+    await self.registration.showNotification('MONEYLOG reminder',{body:'A quiet minute for today’s money log.',icon:'./assets/icon.svg',tag:'moneylog-daily-reminder',data:{url:'./'}});
     await new Promise((resolve,reject)=>{const r=d.transaction('publicPrefs','readwrite').objectStore('publicPrefs').put({...p,key:'reminder',lastReminderDate:today});r.onsuccess=resolve;r.onerror=reject;});
   }catch{}
 })());});

@@ -1,12 +1,12 @@
 {
-  "version": "2.1.4",
+  "version": "2.3.0",
   "released": "2026-10-05",
-  "title": "MONEYLOG 2.1.4",
+  "title": "MONEYLOG 2.3.0",
   "notes": [
-    "Removed duplicate top-level Add actions",
-    "Centered and aligned the bottom Add action",
-    "Tighter typography and spacing across the app",
-    "Replaced the old lock glyph with a clear lock icon",
-    "Modernized the mobile navigation and surface hierarchy"
+    "Added redundant encrypted local snapshots to recover from a damaged latest vault write",
+    "Added visible backup health and stronger Data Shield guidance",
+    "Added Install Web App and Use Web Version directly on the setup and login screens",
+    "Made protected-file creation more reliable and verifies the written recovery file",
+    "Reorganized deploy files so runtime assets live under assets/ while GitHub Pages entry files remain at the root"
   ]
 }

@@ -56,3 +56,29 @@ Refreshing the app does not intentionally lock the current session. MONEYLOG res
 ## 2.1.4 UI refresh
 
 The current interface uses a tighter type scale, a centered five-item mobile navigation, a dedicated Add action, and a standard lock icon. The layout is designed to feel compact and app-like rather than oversized or template-like.
+
+
+## 2.2.0 quality and data protection update
+
+MONEYLOG 2.2.0 adds a cleaner interface, a clearer circular Lock control, smarter daily-entry defaults, and a smoother staged update flow.
+
+### Data Shield
+MONEYLOG now requests persistent browser storage where supported. It also supports a protected `.moneylog` recovery file that can live outside browser site storage. After setup, changes can update that protected file automatically while the app is open.
+
+This is the important limitation to understand: a full browser cleanup of Cookies and other site data can remove IndexedDB, local storage, caches, and related origin data. Installing a PWA does not turn browser storage into an independent cloud vault. Data Shield gives the app a durable recovery path outside that origin storage.
+
+On a browser that supports the File System Access API, use **Settings → Data Shield → Protect my data**. Keep the protected file somewhere safe. After a site-data reset, open MONEYLOG and choose **Restore protected MONEYLOG**.
+
+### Update flow
+Updates are checked quietly online. When a new version is found, MONEYLOG shows the release notes first, installs the new service-worker cache, hands control to it, and then reloads the app once the new shell is active. Your encrypted vault is separate from the app shell.
+
+
+## 2.3.0 safety and organization
+
+- Added a previous encrypted vault snapshot for recovery from damaged local writes.
+- Added clearer backup health status and stronger Data Shield messaging.
+- Added Install Web App and Use Web Version controls directly to the setup and login screens.
+- Protected-file creation now chooses the file first and verifies the written file after saving.
+- Runtime assets are organized under `assets/` and supporting documentation under `docs/`.
+
+A deliberate browser/site-data wipe can still remove browser-managed storage. The protected `.moneylog` file is the recovery layer designed to survive that cleanup.

@@ -1,5 +1,5 @@
 /* MONEYLOG PWA - local-first encrypted personal finance journal */
-const APP_VERSION = '2.1.4';
+const APP_VERSION = '2.3.0';
 const UPDATE_MANIFEST_URL = './version.json';
 const DB_NAME = 'moneylog-secure-v2';
 const DB_VERSION = 1;
@@ -11,7 +11,7 @@ const DEFAULT_CATEGORIES = {
   income: ['Salary','Freelance','Business','Gift','Interest','Other']
 };
 const ICONS = {
-  home:'⌂', history:'◷', insights:'◒', settings:'⚙', lock:'🔒', eye:'◉', plus:'＋', arrow:'→',
+  home:'⌂', history:'◷', insights:'◒', settings:'⚙', lock:'<svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="10" width="12" height="10" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M8.5 10V7.4a3.5 3.5 0 0 1 7 0V10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M12 14v2.2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>', eye:'◉', plus:'＋', arrow:'→',
   income:'↙', expense:'↗', transfer:'⇄', wallet:'▣', goal:'◎', repeat:'↻', bell:'◔', shield:'◇',
   search:'⌕', edit:'✎', trash:'⌫', down:'⌄', up:'⌃', check:'✓', close:'×', moon:'◐', sun:'☼'
 };
@@ -25,6 +25,12 @@ let modalCloseTimer = null;
 let deferredInstallPrompt = null;
 let autoLockTimer = null;
 let updateInfo = null;
+let protectedBackupWriteTimer = null;
+let protectedBackupWriting = false;
+let updateReloadPending = false;
+let updateUiOpen = false;
+let storageProtectionStatus = { persistent:false, backup:false, backupName:'', lastBackupAt:'', snapshot:false, snapshotAt:'' };
+let vaultSaveChain=Promise.resolve();
 const SESSION_KEY_NAME = 'moneylog-session-key';
 const SESSION_SEEN_NAME = 'moneylog-session-seen';
 
@@ -179,8 +185,19 @@ async function unlockPassword(password){
   const check=await decryptText(meta.check,key);
   if(check!=='MONEYLOG-PASSWORD-CHECK-v2' && check!=='MONEYLOG-PASSWORD-CHECK-v3') throw new Error('WRONG_PASSWORD');
   const vault=await idbGet('vault','main');
-  if(vault){ const raw=await decryptText(vault,key); state=validateState(JSON.parse(raw)); }
-  else state=defaultState();
+  const previous=await idbGet('vault','previous');
+  if(vault){
+    try{ const raw=await decryptText(vault,key); state=validateState(JSON.parse(raw)); }
+    catch(err){
+      if(!previous)throw err;
+      const raw=await decryptText(previous,key); state=validateState(JSON.parse(raw));
+      showToast('The latest vault copy was damaged. MONEYLOG opened the previous safe copy. Export a backup soon.');
+      await idbPut('meta',{key:'vaultHealth',lastRecoveryAt:new Date().toISOString(),snapshot:true});
+    }
+  } else if(previous){
+    const raw=await decryptText(previous,key); state=validateState(JSON.parse(raw));
+    showToast('The main vault copy was missing. MONEYLOG recovered the previous safe copy. Export a backup soon.');
+  } else state=defaultState();
   sessionKey=key;
   await saveVault();
   await processRecurring();
@@ -188,9 +205,23 @@ async function unlockPassword(password){
 }
 async function saveVault(){
   if(!sessionKey||!state) return;
-  const payload=await encryptText(JSON.stringify(state),sessionKey);
-  await idbPut('vault',{key:'main',...payload});
-  await syncPublicPrefs();
+  const nextState=validateState(JSON.parse(JSON.stringify(state)));
+  vaultSaveChain=vaultSaveChain.catch(()=>{}).then(async()=>{
+    const payload=await encryptText(JSON.stringify(nextState),sessionKey);
+    const existing=await idbGet('vault','main').catch(()=>null);
+    let canSnapshot=false;
+    if(existing?.iv&&existing?.data){
+      try{ await decryptText(existing,sessionKey); canSnapshot=true; }catch{}
+    }
+    if(canSnapshot) await idbPut('vault',{key:'previous',iv:existing.iv,data:existing.data,updatedAt:existing.updatedAt||new Date().toISOString()});
+    else await idbDelete('vault','previous').catch(()=>{});
+    await idbPut('vault',{key:'main',...payload,updatedAt:new Date().toISOString()});
+    state=nextState;
+    await idbPut('meta',{key:'vaultHealth',lastSavedAt:new Date().toISOString(),snapshot:true});
+    await syncPublicPrefs();
+    queueProtectedBackup();
+  });
+  return vaultSaveChain;
 }
 function defaultState(){
   return {
@@ -201,7 +232,7 @@ function defaultState(){
     budgets:{overallMinor:0,category:{}},
     goals:[],
     recurring:[],
-    settings:{currency:'BDT',theme:'light',hideAmounts:false,defaultAccountId:null,reminderEnabled:false,reminderTime:'20:30',autoLock:'15',lastReminderDate:'',lastBackupAt:'',firstDayTip:true,installChoice:'',durableBackupName:'moneylog-vault.moneylog'}
+    settings:{currency:'BDT',theme:'light',hideAmounts:false,defaultAccountId:null,lastExpenseCategoryId:'',lastIncomeCategoryId:'',reminderEnabled:false,reminderTime:'20:30',autoLock:'15',lastReminderDate:'',lastBackupAt:'',firstDayTip:true,installChoice:'',durableBackupName:'moneylog-vault.moneylog'}
   };
 }
 function normalizeAccounts(accounts,transactions,settings){
@@ -246,6 +277,8 @@ function validateState(s){
 
 async function setupPassword(){
   renderAuth('setup');
+  $('#restore-protected-entry')?.addEventListener('click',pickProtectedRestore);
+  $('#protected-restore-file')?.addEventListener('change',e=>restoreProtectedBackup(e.target.files?.[0]));
   $('#setup-form').addEventListener('submit',async e=>{
     e.preventDefault();
     const username=$('#setup-username').value.trim(),p=$('#setup-password').value,c=$('#setup-confirm').value,recovery=$('#setup-recovery').value.trim(),recoveryConfirm=$('#setup-recovery-confirm').value.trim();
@@ -254,7 +287,7 @@ async function setupPassword(){
     if(p!==c)return showToast('The passwords do not match.');
     if(recovery.length<8)return showToast('Use at least 8 characters for your recovery code.');
     if(recovery!==recoveryConfirm)return showToast('The recovery codes do not match.');
-    try{ await createPassword(p); state=defaultState(); state.settings.defaultAccountId=state.accounts[0].id; state.settings.username=username; await createRecoveryProfile(username,recovery); await saveVault(); await finishUnlock(); showToast('MONEYLOG is ready.'); }
+    try{ await createPassword(p); state=defaultState(); state.settings.defaultAccountId=state.accounts[0].id; state.settings.username=username; await createRecoveryProfile(username,recovery); await saveVault(); await finishUnlock({newVault:true}); showToast('MONEYLOG is ready.'); }
     catch(err){console.error(err);showToast('Could not create the secure vault.');}
   });
 }
@@ -302,14 +335,187 @@ async function resumeSessionAfterRefresh(){
   }catch{clearSession();return false;}
 }
 
-async function finishUnlock(){
+
+async function refreshStorageProtectionStatus(){
+  try{
+    const persisted=!!(navigator.storage?.persisted && await navigator.storage.persisted().catch(()=>false));
+    const meta=await idbGet('meta','protectedBackup');
+    const snapshotMeta=await idbGet('meta','vaultHealth');
+    const previous=await idbGet('vault','previous');
+    storageProtectionStatus={
+      persistent:persisted,
+      backup:!!meta?.handle,
+      backupName:String(meta?.name||''),
+      lastBackupAt:String(meta?.lastBackupAt||''),
+      snapshot:!!snapshotMeta?.snapshot || !!previous,
+      snapshotAt:String(snapshotMeta?.lastSavedAt||previous?.updatedAt||'')
+    };
+  }catch{
+    storageProtectionStatus={...storageProtectionStatus,persistent:false};
+  }
+  return storageProtectionStatus;
+}
+async function requestPersistentStorage(){
+  try{
+    const already=!!(navigator.storage?.persisted && await navigator.storage.persisted().catch(()=>false));
+    const persistent=already || !!(navigator.storage?.persist && await navigator.storage.persist().catch(()=>false));
+    await idbPut('meta',{key:'storageProtection',persistent,checkedAt:new Date().toISOString()});
+    storageProtectionStatus.persistent=persistent;
+    return persistent;
+  }catch{return false;}
+}
+async function verifyFilePermission(handle,request=false){
+  if(!handle)return false;
+  try{
+    if(!handle.queryPermission)return true;
+    const opts={mode:'readwrite'};
+    let permission=await handle.queryPermission(opts);
+    if(permission==='granted')return true;
+    if(request && handle.requestPermission)permission=await handle.requestPermission(opts);
+    return permission==='granted';
+  }catch{return false;}
+}
+function protectedBackupStatusLabel(){
+  if(storageProtectionStatus.backup){
+    const when=storageProtectionStatus.lastBackupAt?new Date(storageProtectionStatus.lastBackupAt):null;
+    return when&&!Number.isNaN(when.getTime())?`Protected · ${when.toLocaleTimeString([], {hour:'numeric',minute:'2-digit'})}`:'Protected backup';
+  }
+  if(storageProtectionStatus.persistent && storageProtectionStatus.snapshot)return 'Persistent · local copy';
+  if(storageProtectionStatus.persistent)return 'Persistent storage';
+  if(storageProtectionStatus.snapshot)return 'Recovery copy';
+  return 'Protection needed';
+}
+function storageQualityStrip(){
+  const online=navigator.onLine!==false;
+  const safe=storageProtectionStatus.backup||storageProtectionStatus.persistent;
+  return `<div class="quality-strip"><span class="quality-chip ${online?'is-online':'is-offline'}"><i></i>${online?'Online':'Offline-ready'}</span><span class="quality-chip ${safe?'quality-safe':'quality-risk'}"><span class="quality-icon">${ICONS.shield}</span>${esc(protectedBackupStatusLabel())}</span>${isInstalledWebApp()?'<span class="quality-chip quality-installed">Installed app</span>':''}</div>`;
+}
+async function saveProtectedEnvelope(handle,wrapSalt,wrappedKey){
+  if(!handle||!sessionKey||!state)return false;
+  if(!await verifyFilePermission(handle,false))return false;
+  try{
+    const security=await idbGet('meta','security');
+    const recovery=await idbGet('meta','recovery');
+    const encrypted=await encryptText(JSON.stringify({state,security,recovery,format:'moneylog-protected-v1'}),sessionKey);
+    const file={magic:'MONEYLOG-PROTECTED',version:1,updatedAt:new Date().toISOString(),wrapSalt,wrappedKey,payload:encrypted};
+    const writable=await handle.createWritable();
+    await writable.write(new Blob([JSON.stringify(file)],{type:'application/octet-stream'}));
+    await writable.close();
+    const verify=JSON.parse(await (await handle.getFile()).text());
+    if(verify.magic!=='MONEYLOG-PROTECTED'||verify.version!==1||verify.payload?.data!==file.payload.data)throw new Error('VERIFY_FAILED');
+    const meta=await idbGet('meta','protectedBackup');
+    const next={key:'protectedBackup',handle,name:handle.name||meta?.name||'moneylog-vault.moneylog',wrapSalt,wrappedKey,lastBackupAt:file.updatedAt};
+    await idbPut('meta',next);
+    storageProtectionStatus={persistent:storageProtectionStatus.persistent,backup:true,backupName:next.name,lastBackupAt:next.lastBackupAt};
+    return true;
+  }catch{return false;}
+}
+function queueProtectedBackup(){
+  clearTimeout(protectedBackupWriteTimer);
+  protectedBackupWriteTimer=setTimeout(async()=>{
+    if(protectedBackupWriting||!sessionKey||!state)return;
+    const meta=await idbGet('meta','protectedBackup').catch(()=>null);
+    if(!meta?.handle)return;
+    protectedBackupWriting=true;
+    try{const ok=await saveProtectedEnvelope(meta.handle,meta.wrapSalt,meta.wrappedKey);if(!ok)storageProtectionStatus={...storageProtectionStatus,backup:false,backupName:String(meta.name||'')};}finally{protectedBackupWriting=false;}
+  },650);
+}
+async function enableProtectedBackup(){
+  if(!sessionKey||!state)return;
+  await requestPersistentStorage();
+  if(!window.showSaveFilePicker){
+    showToast('Automatic file protection is not available in this browser. Download an encrypted .moneylog backup instead.');
+    return;
+  }
+  try{
+    const [handle]=await window.showSaveFilePicker({suggestedName:'moneylog-vault.moneylog',types:[{description:'MONEYLOG protected vault',accept:{'application/octet-stream':['.moneylog']}}]});
+    const p=prompt('Enter your current MONEYLOG password once to protect the recovery file.');
+    if(!p)return;
+    const security=await idbGet('meta','security');
+    const passwordKey=await deriveKey(p,b64ToBytes(security.salt));
+    const check=await decryptText(security.check,passwordKey);
+    if(!['MONEYLOG-PASSWORD-CHECK-v2','MONEYLOG-PASSWORD-CHECK-v3'].includes(check))throw new Error('WRONG_PASSWORD');
+    const wrapSalt=crypto.getRandomValues(new Uint8Array(16));
+    const wrapKey=await deriveKey(p,wrapSalt);
+    const wrappedKey=await encryptText(bytesToB64(await exportKeyRaw(sessionKey)),wrapKey);
+    const ok=await saveProtectedEnvelope(handle,bytesToB64(wrapSalt),wrappedKey);
+    if(!ok)throw new Error('WRITE_FAILED');
+    closeModal();
+    renderApp();
+    showToast('Data Shield is on. Your protected file will update automatically.');
+  }catch(err){if(err?.name==='AbortError')return;showToast(err?.message==='WRONG_PASSWORD'?'That password is not correct.':'Could not create the protected file.');}
+}
+async function pickProtectedRestore(){
+  try{
+    if(window.showOpenFilePicker){
+      const [handle]=await window.showOpenFilePicker({multiple:false,types:[{description:'MONEYLOG protected vault',accept:{'application/octet-stream':['.moneylog']}}]});
+      const file=await handle.getFile();
+      await restoreProtectedBackup(file,handle);
+      return;
+    }
+    const input=$('#protected-restore-file');
+    if(input)input.click();
+  }catch(err){if(err?.name!=='AbortError')showToast('Could not open the protected file.');}
+}
+async function connectProtectedFile(){
+  if(!sessionKey)return;
+  try{
+    if(!window.showOpenFilePicker){showToast('Your browser does not support reconnecting a protected file here. Use Protect my data to choose a file again.');return;}
+    const [handle]=await window.showOpenFilePicker({multiple:false,types:[{description:'MONEYLOG protected vault',accept:{'application/octet-stream':['.moneylog']}}]});
+    const raw=JSON.parse(await (await handle.getFile()).text());
+    if(raw.magic!=='MONEYLOG-PROTECTED'||raw.version!==1)throw new Error('unsupported');
+    const p=prompt('Enter the password used when this protected file was created.');
+    if(!p)return;
+    const wrapKey=await deriveKey(p,b64ToBytes(raw.wrapSalt));
+    const rawKey=await decryptText(raw.wrappedKey,wrapKey);
+    const candidate=b64ToBytes(rawKey);const current=await exportKeyRaw(sessionKey);
+    if(candidate.length!==current.length||candidate.some((v,i)=>v!==current[i]))throw new Error('different-vault');
+    await idbPut('meta',{key:'protectedBackup',handle,name:handle.name||'moneylog-vault.moneylog',wrapSalt:raw.wrapSalt,wrappedKey:raw.wrappedKey,lastBackupAt:raw.updatedAt||new Date().toISOString()});
+    await refreshStorageProtectionStatus();renderApp();showToast('Protected file reconnected. Future saves will update it automatically.');
+  }catch(err){if(err?.name==='AbortError')return;showToast(err?.message==='different-vault'?'That file belongs to a different MONEYLOG vault. Use Restore protected MONEYLOG instead.':'Could not reconnect the protected file.');}
+}
+async function restoreProtectedBackup(file,handle=null){
+  if(!file)return;
+  try{
+    const raw=JSON.parse(await file.text());
+    if(raw.magic!=='MONEYLOG-PROTECTED'||raw.version!==1)throw new Error('unsupported');
+    const p=prompt('Enter the password used when this protected file was created.');
+    if(!p)return;
+    const wrapKey=await deriveKey(p,b64ToBytes(raw.wrapSalt));
+    const rawKey=await decryptText(raw.wrappedKey,wrapKey);
+    const restoredKey=await importKeyRaw(b64ToBytes(rawKey));
+    const payload=JSON.parse(await decryptText(raw.payload,restoredKey));
+    if(!payload?.state||!payload?.security)throw new Error('invalid');
+    const currentVault=await idbGet('vault','main');
+    if(currentVault&&!confirm('Restore the protected MONEYLOG vault? Current local records will be replaced.'))return;
+    const restoredState=validateState(payload.state);
+    sessionKey=restoredKey;state=restoredState;
+    await idbPut('meta',{key:'security',...payload.security});
+    if(payload.recovery)await idbPut('meta',{key:'recovery',...payload.recovery});
+    await saveVault();
+    if(handle){
+      await idbPut('meta',{key:'protectedBackup',handle,name:handle.name||'moneylog-vault.moneylog',wrapSalt:raw.wrapSalt,wrappedKey:raw.wrappedKey,lastBackupAt:raw.updatedAt||new Date().toISOString()});
+    }
+    await requestPersistentStorage();
+    await refreshStorageProtectionStatus();
+    await ensureRecoveryProfile();
+    await persistSession();
+    renderApp();
+    showToast(handle?'Vault restored and protection reconnected.':'Vault restored. Reconnect the protected file in Settings to enable automatic updates.');
+  }catch(err){showToast(err?.message==='OperationError'?'The password does not match this protected file.':'Could not restore the protected MONEYLOG file.');}
+}
+
+async function finishUnlock(options={}){
   await persistSession();
+  await requestPersistentStorage();
+  await refreshStorageProtectionStatus();
   applyTheme();
   resetAutoLockTimer();
   await ensureRecoveryProfile();
   await checkForUpdate(true);
   renderApp();
   maybeShowInstallChoice();
+  if(options.newVault)setTimeout(()=>maybeShowDataShieldPrompt(),1400);
 }
 function lockApp(silent=false){
   clearSession();
@@ -345,7 +551,7 @@ function appShell(content){
     <aside class="sidebar"><div class="brand"><div class="brand-name">MONEY<span>LOG</span></div><div class="brand-tag">PERSONAL MONEY JOURNAL</div></div>
       <nav class="nav">${navItem('home','Home',ICONS.home)}${navItem('history','History',ICONS.history)}${navItem('insights','Insights',ICONS.insights)}${navItem('settings','Settings',ICONS.settings)}</nav>
       <div class="sidebar-spacer"></div><div class="side-card"><strong>${state.accounts.filter(a=>!a.archived).length} active accounts</strong><small>Your records stay on this device.</small></div><button class="btn btn-ghost" data-action="lock">${ICONS.lock} Lock MONEYLOG</button></aside>
-    <main class="main"><div class="content">${update}${content}</div></main>
+    <main class="main"><div class="content">${storageQualityStrip()}${update}${content}</div></main>
     <nav class="mobile-nav">${navItem('home','Home',ICONS.home)}${navItem('history','History',ICONS.history)}<button class="nav-add" data-action="add" aria-label="Add transaction"><span class="nav-add-icon">${ICONS.plus}</span><span>Add</span></button>${navItem('insights','Insights',ICONS.insights)}${navItem('settings','Settings',ICONS.settings)}</nav>
   </div><footer class="app-footer">Made with <span>♥</span> by nashihab</footer>`;
 }
@@ -359,12 +565,23 @@ function renderApp(){
   else content=settingsView();
   $('#app').innerHTML=appShell(content);
 }
+function authAccessPanel(){
+  const installed=isInstalledWebApp();
+  return `<div class="auth-access">
+    <div class="auth-access-head"><strong>Choose how you use MONEYLOG</strong><span class="mini">You can change this later</span></div>
+    <div class="auth-access-grid">
+      <button type="button" class="auth-access-option ${installed?'is-active':''}" data-action="install"><span class="auth-access-icon">↥</span><span><strong>${installed?'Installed Web App':'Install Web App'}</strong><small>${installed?'Open MONEYLOG like an app':'Recommended for daily use'}</small></span></button>
+      <button type="button" class="auth-access-option" data-action="use-web"><span class="auth-access-icon">↗</span><span><strong>Use Web Version</strong><small>Stay in your browser</small></span></button>
+    </div>
+  </div>`;
+}
+
 function renderAuth(mode){
   document.documentElement.dataset.theme='light';
   if(mode==='setup'){
-    $('#app').innerHTML=`<div class="auth"><div class="auth-card glass"><div class="auth-brand"><div class="brand-name">MONEY<span>LOG</span></div><div class="brand-tag">PERSONAL MONEY JOURNAL</div></div><h1 class="auth-title">Create your private MONEYLOG.</h1><p class="auth-copy">Set a local username, password, and recovery code. Nothing is sent to a server.</p><form id="setup-form"><div class="field"><label>Username</label><input id="setup-username" class="input" minlength="2" maxlength="40" autocomplete="username" required placeholder="Choose a local username"></div><div class="field" style="margin-top:12px"><label>Password</label><div class="password-wrap"><input id="setup-password" class="input" type="password" minlength="8" autocomplete="new-password" required placeholder="At least 8 characters"><button class="reveal" type="button" data-action="toggle-pass" data-target="setup-password">◉</button></div></div><div class="field" style="margin-top:12px"><label>Confirm password</label><input id="setup-confirm" class="input" type="password" minlength="8" autocomplete="new-password" required placeholder="Enter it again"></div><div class="field" style="margin-top:12px"><label>Recovery code</label><input id="setup-recovery" class="input" minlength="8" maxlength="64" required placeholder="Create a recovery code"></div><div class="field" style="margin-top:12px"><label>Confirm recovery code</label><input id="setup-recovery-confirm" class="input" minlength="8" maxlength="64" required placeholder="Enter it again"></div><div class="install-hint" style="margin-top:14px"><strong>Do not lose the recovery code.</strong><br>MONEYLOG cannot email it or recover it for you. It is your password-reset method.</div><button class="btn btn-primary" style="width:100%;margin-top:14px">Create MONEYLOG</button></form><div class="auth-footer">Made with <span>♥</span> by nashihab</div></div></div>`;
+    $('#app').innerHTML=`<div class="auth"><div class="auth-card glass"><div class="auth-brand"><div class="brand-name">MONEY<span>LOG</span></div><div class="brand-tag">PERSONAL MONEY JOURNAL</div></div><h1 class="auth-title">Create your private MONEYLOG.</h1><p class="auth-copy">Set a local username, password, and recovery code. Nothing is sent to a server.</p><form id="setup-form"><div class="field"><label>Username</label><input id="setup-username" class="input" minlength="2" maxlength="40" autocomplete="username" required placeholder="Choose a local username"></div><div class="field" style="margin-top:12px"><label>Password</label><div class="password-wrap"><input id="setup-password" class="input" type="password" minlength="8" autocomplete="new-password" required placeholder="At least 8 characters"><button class="reveal" type="button" data-action="toggle-pass" data-target="setup-password">◉</button></div></div><div class="field" style="margin-top:12px"><label>Confirm password</label><input id="setup-confirm" class="input" type="password" minlength="8" autocomplete="new-password" required placeholder="Enter it again"></div><div class="field" style="margin-top:12px"><label>Recovery code</label><input id="setup-recovery" class="input" minlength="8" maxlength="64" required placeholder="Create a recovery code"></div><div class="field" style="margin-top:12px"><label>Confirm recovery code</label><input id="setup-recovery-confirm" class="input" minlength="8" maxlength="64" required placeholder="Enter it again"></div><div class="install-hint" style="margin-top:14px"><strong>Do not lose the recovery code.</strong><br>MONEYLOG cannot email it or recover it for you. It is your password-reset method.</div><button class="btn btn-primary" style="width:100%;margin-top:14px">Create MONEYLOG</button></form><button class="btn btn-ghost" id="restore-protected-entry" style="width:100%;margin-top:8px">Restore protected MONEYLOG</button><input id="protected-restore-file" class="hidden" type="file" accept=".moneylog,application/octet-stream">${authAccessPanel()}<div class="auth-footer">Made with <span>♥</span> by nashihab</div></div></div>`;
   } else {
-    $('#app').innerHTML=`<div class="auth"><div class="auth-card glass"><div class="auth-brand"><div class="brand-name">MONEY<span>LOG</span></div><div class="brand-tag">PERSONAL MONEY JOURNAL</div></div><h1 class="auth-title">Welcome back.</h1><p class="auth-copy">Enter your username and password to unlock your private vault.</p><form id="login-form"><div class="field"><label>Username</label><input id="login-username" class="input" autocomplete="username" required placeholder="Your MONEYLOG username"></div><div class="field" style="margin-top:12px"><label>Password</label><div class="password-wrap"><input id="login-password" class="input" type="password" autocomplete="current-password" required placeholder="Your MONEYLOG password"><button class="reveal" type="button" data-action="toggle-pass" data-target="login-password">◉</button></div></div><button class="btn btn-primary" style="width:100%;margin-top:14px">Unlock MONEYLOG</button></form><button class="btn btn-ghost" style="width:100%;margin-top:8px" data-action="forgot-password">Forgot password? Use recovery code</button><div class="install-hint" style="margin-top:14px">Your financial data stays on this device. Use the installed web app for the safest storage experience.</div><div class="auth-footer">Made with <span>♥</span> by nashihab</div></div></div>`;
+    $('#app').innerHTML=`<div class="auth"><div class="auth-card glass"><div class="auth-brand"><div class="brand-name">MONEY<span>LOG</span></div><div class="brand-tag">PERSONAL MONEY JOURNAL</div></div><h1 class="auth-title">Welcome back.</h1><p class="auth-copy">Enter your username and password to unlock your private vault.</p><form id="login-form"><div class="field"><label>Username</label><input id="login-username" class="input" autocomplete="username" required placeholder="Your MONEYLOG username"></div><div class="field" style="margin-top:12px"><label>Password</label><div class="password-wrap"><input id="login-password" class="input" type="password" autocomplete="current-password" required placeholder="Your MONEYLOG password"><button class="reveal" type="button" data-action="toggle-pass" data-target="login-password">◉</button></div></div><button class="btn btn-primary" style="width:100%;margin-top:14px">Unlock MONEYLOG</button></form><button class="btn btn-ghost" style="width:100%;margin-top:8px" data-action="forgot-password">Forgot password? Use recovery code</button><div class="install-hint" style="margin-top:14px">Your financial data stays on this device. Data Shield adds recovery outside browser site storage.</div>${authAccessPanel()}<div class="auth-footer">Made with <span>♥</span> by nashihab</div></div></div>`;
     $('#login-form').addEventListener('submit',async e=>{e.preventDefault();try{const entered=$('#login-username').value.trim();const recoveryMeta=await idbGet('meta','recovery');if(recoveryMeta&&entered.toLowerCase()!==String(recoveryMeta.username).toLowerCase())throw new Error('WRONG_USER');await unlockPassword($('#login-password').value);await finishUnlock();}catch(err){const msg=err?.message==='WRONG_USER'?'That username is not correct.':err?.message==='WRONG_PASSWORD'?'That password is not correct.':'Could not open your vault.';showToast(msg);$('#login-password').select();}});
   }
 }
@@ -403,7 +620,7 @@ function homeView(){
   const latest=recentTransactions(5);
   const hide=state.settings.hideAmounts;
   const accDefault=state.settings.defaultAccountId||activeAccounts[0]?.id;
-  return `<div class="topbar"><div><div class="kicker">${greeting()}</div><h1 class="page-title">Your money, clearly.</h1></div><div class="top-actions"><button class="btn btn-soft optional" data-action="quick-income">${ICONS.income} Income</button><button class="btn btn-ghost btn-icon top-lock" data-action="lock" aria-label="Lock MONEYLOG" title="Lock MONEYLOG">${ICONS.lock}</button></div></div>
+  return `<div class="topbar"><div><div class="kicker">${greeting()}</div><h1 class="page-title">Your money, clearly.</h1></div><div class="top-actions"><button class="btn btn-soft optional" data-action="quick-income">${ICONS.income} Income</button><button class="btn btn-ghost btn-icon top-lock" data-action="lock" aria-label="Lock MONEYLOG" title="Lock MONEYLOG"><span class="top-lock-circle">${ICONS.lock}</span></button></div></div>
   <section class="hero"><div class="hero-row"><div><div class="kicker label">TOTAL AVAILABLE</div><div class="hero-amount">${hide?'••••••••':esc(formatMoney(totalBalance()))}</div><small class="label">Across ${activeAccounts.length} active account${activeAccounts.length===1?'':'s'}</small><div class="hero-date">Today · ${esc(fmtDate(todayISO()))}</div></div><button class="btn btn-soft" data-action="toggle-hide">${ICONS.eye} ${hide?'Show':'Hide'}</button></div></section>
   <div class="grid grid-4 section"><div class="card stat"><div class="label">THIS MONTH · IN</div><strong class="income">${hide?'••••':esc(formatMoney(totals.income,true))}</strong></div><div class="card stat"><div class="label">THIS MONTH · OUT</div><strong class="expense">${hide?'••••':esc(formatMoney(totals.expense,true))}</strong></div><div class="card stat"><div class="label">NET FLOW</div><strong class="${totals.income-totals.expense>=0?'income':'expense'}">${hide?'••••':esc(formatMoney(totals.income-totals.expense,true))}</strong></div><div class="card stat"><div class="label">BUDGET LEFT</div><strong>${hide?'••••':remaining===null?'-':esc(formatMoney(remaining,true))}</strong></div></div>
   <div class="section"><div class="section-head"><h2>Quick add</h2><span class="mini">Few taps. Done.</span></div><div class="quick-grid"><button class="quick" data-action="quick-expense"><span class="qicon expense">${ICONS.expense}</span><span><strong>Expense</strong><small>Food, transport, bills…</small></span></button><button class="quick" data-action="quick-income"><span class="qicon income">${ICONS.income}</span><span><strong>Income</strong><small>Salary, freelance…</small></span></button><button class="quick" data-action="quick-transfer"><span class="qicon">${ICONS.transfer}</span><span><strong>Transfer</strong><small>Move between accounts</small></span></button></div></div>
@@ -416,7 +633,7 @@ function goalCard(g){const pct=clamp(g.currentMinor/g.targetMinor*100,0,100);ret
 function historyView(){
   const cats=[...new Set(state.transactions.filter(t=>t.type!=='transfer').map(t=>categoryName(t.type,t.categoryId)))].sort();
   const rows=filteredTransactions();
-  return `<div class="topbar"><div><div class="kicker">YOUR JOURNAL</div><h1 class="page-title">History</h1></div><div class="top-actions"><button class="btn btn-soft" data-action="export-csv">Export CSV</button><button class="btn btn-ghost btn-icon top-lock" data-action="lock" aria-label="Lock MONEYLOG" title="Lock MONEYLOG">${ICONS.lock}</button></div></div>
+  return `<div class="topbar"><div><div class="kicker">YOUR JOURNAL</div><h1 class="page-title">History</h1></div><div class="top-actions"><button class="btn btn-soft" data-action="export-csv">Export CSV</button><button class="btn btn-ghost btn-icon top-lock" data-action="lock" aria-label="Lock MONEYLOG" title="Lock MONEYLOG"><span class="top-lock-circle">${ICONS.lock}</span></button></div></div>
   <div class="card"><div class="filters"><input class="input search" id="history-q" placeholder="Search notes, categories, accounts…" value="${esc(historyFilters.q)}"><select class="select" id="history-type"><option value="all">All types</option><option value="expense" ${historyFilters.type==='expense'?'selected':''}>Expenses</option><option value="income" ${historyFilters.type==='income'?'selected':''}>Income</option><option value="transfer" ${historyFilters.type==='transfer'?'selected':''}>Transfers</option></select><select class="select" id="history-account"><option value="all">All accounts</option>${accountOptions(historyFilters.account==='all'?'':historyFilters.account,true)}</select><select class="select" id="history-category"><option value="all">All categories</option>${cats.map(c=>`<option ${historyFilters.category===c?'selected':''}>${esc(c)}</option>`).join('')}</select><input class="input" id="history-from" type="date" value="${esc(historyFilters.from)}"><input class="input" id="history-to" type="date" value="${esc(historyFilters.to)}"></div></div>
   <div class="section"><div class="section-head"><h2>${rows.length} record${rows.length===1?'':'s'}</h2><button class="btn btn-ghost" data-action="clear-filters">Clear filters</button></div>${rows.length?`<div class="table-wrap"><table><thead><tr><th>Date</th><th>Entry</th><th>Account</th><th>Type</th><th>Amount</th></tr></thead><tbody>${rows.map(t=>`<tr data-action="edit-tx" data-id="${esc(t.id)}" style="cursor:pointer"><td>${esc(fmtDate(t.date))}</td><td><strong>${esc(t.type==='transfer'?'Transfer':categoryName(t.type,t.categoryId))}</strong><div class="mini">${esc(t.note||'')}</div></td><td>${esc(t.type==='transfer'?`${accountName(t.accountId)} → ${accountName(t.toAccountId)}`:accountName(t.accountId))}</td><td><span class="pill">${esc(t.type)}</span></td><td class="money ${t.type==='income'?'positive':t.type==='expense'?'negative':''}">${esc(signedMoney(t.amountMinor,t.type))}</td></tr>`).join('')}</tbody></table></div>`:`<div class="empty"><strong>No matching records.</strong>Try clearing a filter or add a new transaction.</div>`}</div>`;
 }
@@ -437,7 +654,7 @@ function insightsView(){
   const ranked=Object.entries(expenseByCat).sort((a,b)=>b[1]-a[1]).slice(0,8);const max=ranked[0]?.[1]||1;
   const months=[];const now=new Date(`${todayISO()}T00:00:00`);for(let i=5;i>=0;i--){const d=new Date(now.getFullYear(),now.getMonth()-i,1);const key=d.toISOString().slice(0,7);months.push({key,label:d.toLocaleDateString('en-BD',{month:'short'}),...periodTotals(`${key}-01`,`${key}-${new Date(d.getFullYear(),d.getMonth()+1,0).getDate()}`)});}
   const trendMax=Math.max(1,...months.map(m=>Math.max(m.income,m.expense)));
-  return `<div class="topbar"><div><div class="kicker">UNDERSTAND YOUR MONEY</div><h1 class="page-title">Insights</h1></div><div class="top-actions"><select class="select" id="insight-range" style="width:auto"><option value="week">This week</option><option value="thisMonth" selected>This month</option><option value="lastMonth">Last month</option><option value="3Months">Last 3 months</option><option value="year">This year</option></select><button class="btn btn-ghost btn-icon top-lock" data-action="lock" aria-label="Lock MONEYLOG" title="Lock MONEYLOG">${ICONS.lock}</button></div></div>
+  return `<div class="topbar"><div><div class="kicker">UNDERSTAND YOUR MONEY</div><h1 class="page-title">Insights</h1></div><div class="top-actions"><select class="select" id="insight-range" style="width:auto"><option value="week">This week</option><option value="thisMonth" selected>This month</option><option value="lastMonth">Last month</option><option value="3Months">Last 3 months</option><option value="year">This year</option></select><button class="btn btn-ghost btn-icon top-lock" data-action="lock" aria-label="Lock MONEYLOG" title="Lock MONEYLOG"><span class="top-lock-circle">${ICONS.lock}</span></button></div></div>
   <div class="grid grid-3"><div class="card stat"><div class="label">INCOME</div><strong class="income">${esc(formatMoney(totals.income))}</strong><small class="muted">${esc(fmtDate(range.from))} → ${esc(fmtDate(range.to))}</small></div><div class="card stat"><div class="label">EXPENSE</div><strong class="expense">${esc(formatMoney(totals.expense))}</strong><small class="muted">Transfers excluded</small></div><div class="card stat"><div class="label">NET FLOW</div><strong class="${totals.income-totals.expense>=0?'income':'expense'}">${esc(formatMoney(totals.income-totals.expense))}</strong><small class="muted">Income minus expenses</small></div></div>
   <div class="grid grid-2 section"><div class="card"><div class="section-head"><h2>Where it goes</h2><span class="mini">This month</span></div>${ranked.length?`<div class="chart">${ranked.map(([name,val])=>`<div class="bar-item"><span class="truncate">${esc(name)}</span><div class="bar-track"><span style="width:${val/max*100}%"></span></div><strong style="text-align:right">${esc(formatMoney(val,true))}</strong></div>`).join('')}</div>`:`<div class="empty"><strong>No expenses yet.</strong>Category insights appear after your first expense.</div>`}</div>
   <div class="card"><div class="section-head"><h2>Six-month flow</h2><span class="mini">Income vs expense</span></div><div class="chart">${months.map(m=>`<div><div class="row" style="justify-content:space-between"><span class="mini">${esc(m.label)}</span><span class="mini">${esc(formatMoney(m.income,true))} in · ${esc(formatMoney(m.expense,true))} out</span></div><div class="progress" style="margin-top:5px"><span style="width:${m.income/trendMax*100}%;background:var(--income)"></span></div><div class="progress" style="margin-top:4px"><span style="width:${m.expense/trendMax*100}%;background:var(--expense)"></span></div></div>`).join('')}</div></div></div>
@@ -445,9 +662,10 @@ function insightsView(){
 }
 function settingsView(){
   const s=state.settings;const recurringDue=state.recurring.filter(r=>r.active);
-  return `<div class="topbar"><div><div class="kicker">YOUR CONTROL CENTER</div><h1 class="page-title">Settings</h1></div><div class="top-actions"><button class="btn btn-ghost btn-icon top-lock" data-action="lock" aria-label="Lock MONEYLOG" title="Lock MONEYLOG">${ICONS.lock}</button></div></div>
+  return `<div class="topbar"><div><div class="kicker">YOUR CONTROL CENTER</div><h1 class="page-title">Settings</h1></div><div class="top-actions"><button class="btn btn-ghost btn-icon top-lock" data-action="lock" aria-label="Lock MONEYLOG" title="Lock MONEYLOG"><span class="top-lock-circle">${ICONS.lock}</span></button></div></div>
   <div class="grid grid-2"><div class="card"><div class="section-head"><div><h2>Privacy & security</h2><span class="mini">Local-only controls</span></div><span class="pill">${ICONS.shield} Private</span></div><div class="setting-list"><div class="setting"><div><div class="setting-title">Hide amounts</div><div class="setting-desc">Mask monetary values on the dashboard.</div></div><label class="switch"><input id="setting-hide" type="checkbox" ${s.hideAmounts?'checked':''}><span class="slider"></span></label></div><div class="setting"><div><div class="setting-title">Auto-lock</div><div class="setting-desc">Lock after inactivity.</div></div><select class="select" id="setting-autolock" style="width:auto"><option value="5" ${s.autoLock==='5'?'selected':''}>5 min</option><option value="15" ${s.autoLock==='15'?'selected':''}>15 min</option><option value="30" ${s.autoLock==='30'?'selected':''}>30 min</option><option value="0" ${s.autoLock==='0'?'selected':''}>Never</option></select></div><div class="setting"><div><div class="setting-title">Change password</div><div class="setting-desc">Re-encrypt the vault with a new password.</div></div><button class="btn btn-soft" data-action="change-password">Change</button></div><div class="setting"><div><div class="setting-title">Lock MONEYLOG</div><div class="setting-desc">Close the current decrypted session.</div></div><button class="btn btn-ghost" data-action="lock">Lock</button></div></div></div>
   <div class="card"><div class="section-head"><div><h2>Daily journal reminder</h2><span class="mini">A gentle nudge to record today's money.</span></div><span class="pill">${ICONS.bell} Reminder</span></div><div class="setting"><div><div class="setting-title">Daily reminder</div><div class="setting-desc">Notifications are optional and controlled by your device.</div></div><label class="switch"><input id="setting-reminder" type="checkbox" ${s.reminderEnabled?'checked':''}><span class="slider"></span></label></div><div class="form-grid two"><div class="field"><label>Reminder time</label><input id="setting-reminder-time" class="input" type="time" value="${esc(s.reminderTime)}"></div><div class="field"><label>Status</label><div class="install-hint" id="reminder-status">${esc(reminderStatusText())}</div></div></div><div class="mini" style="margin-top:10px">Best-effort background delivery depends on browser support. When background scheduling is unavailable, MONEYLOG also checks while the app is active.</div></div></div>
+  <div class="card section data-shield-card"><div class="section-head"><div><h2>Data Shield</h2><span class="mini">Three layers: persistent storage, a safe local copy, and an encrypted file outside browser storage.</span></div><span class="pill">${storageProtectionStatus.backup?'Protected':'Needs backup'}</span></div><div class="shield-grid"><div><strong>${storageProtectionStatus.backup?'Protected backup connected':'Protect your vault before you need it'}</strong><p class="muted">${storageProtectionStatus.backup?`MONEYLOG can update <b>${esc(storageProtectionStatus.backupName||'moneylog-vault.moneylog')}</b> automatically after changes.`:'The local recovery copy helps with corrupted writes. Only the protected .moneylog file gives you a recovery path outside browser site storage.'}</p><div class="shield-status"><span class="status-dot ${storageProtectionStatus.backup?'good':''}"></span>${storageProtectionStatus.backup?'Automatic external backup is active.':storageProtectionStatus.persistent?'Persistent storage is active, but an external backup is still recommended.':'Browser storage is best-effort. Set up an external backup.'}</div></div><div class="safety-checks"><div class="safety-check"><strong>1</strong> Encrypted vault</div><div class="safety-check"><strong>2</strong> Previous safe copy</div><div class="safety-check"><strong>3</strong> External recovery</div></div></div><div class="shield-actions"><button class="btn btn-primary" data-action="setup-data-shield">${storageProtectionStatus.backup?'Replace protected file':'Protect my data'}</button><button class="btn btn-ghost" data-action="export-backup">Download backup</button>${storageProtectionStatus.backup?'<button class="btn btn-ghost" data-action="connect-protected">Reconnect file</button>':''}</div></div></div>
   <div class="card section"><div class="section-head"><div><h2>Local profile</h2><span class="mini">Stored only on this device.</span></div><span class="pill">${esc(state.settings.username||'Local user')}</span></div><p class="muted">Your username is used to verify the correct vault during sign-in and password recovery. It is not an online account.</p></div><div class="card section"><div class="section-head"><div><h2>Appearance</h2><span class="mini">Comfortable in light or dark environments.</span></div></div><div class="choice-row">${['system','light','dark'].map(x=>`<button class="choice ${s.theme===x?'active':''}" data-action="theme" data-theme="${x}">${x==='system'?'System':x==='light'?ICONS.sun+' Light':ICONS.moon+' Dark'}</button>`).join('')}</div></div>
   <div class="card section"><div class="section-head"><div><h2>Money format</h2><span class="mini">One base currency throughout the app.</span></div></div><div class="form-grid two"><div class="field"><label>Currency</label><select id="setting-currency" class="select">${Object.entries(CURRENCIES).map(([k,v])=>`<option value="${k}" ${s.currency===k?'selected':''}>${esc(k)} · ${esc(v)}</option>`).join('')}</select></div><div class="field"><label>Backup</label><button class="btn btn-soft" data-action="export-backup">Export encrypted backup</button></div></div><div class="form-grid two" style="margin-top:12px"><div class="field"><label>Restore</label><input id="restore-file" class="input" type="file" accept=".moneylog,application/octet-stream"></div><div class="field"><label>Install</label>${isInstalledWebApp()?'<div class="installed-status">MONEYLOG is installed as a Web App.</div>':'<button class="btn btn-ghost" data-action="install">Add MONEYLOG to home screen</button>'}</div></div></div>
   <div class="grid grid-2 section"><div class="card"><div class="section-head"><div><h2>Accounts</h2><span class="mini">Cash, bank, savings and more.</span></div><button class="btn btn-primary" data-action="add-account">Add</button></div><div class="list">${state.accounts.map(a=>`<div class="list-row"><span class="avatar">${ICONS.wallet}</span><span class="grow"><strong>${esc(a.name)}</strong><span class="account-meta"><small>${esc(a.type)}</small>${a.archived?'<span class="pill">Archived</span>':''}</span></span><strong class="money">${esc(formatMoney(balanceForAccount(a.id)))}</strong><button class="btn btn-ghost btn-icon" data-action="edit-account" data-id="${esc(a.id)}">${ICONS.edit}</button></div>`).join('')}</div></div>
@@ -455,7 +673,7 @@ function settingsView(){
   <div class="grid grid-2 section"><div class="card"><div class="section-head"><div><h2>Categories</h2><span class="mini">Custom categories stay in history when archived.</span></div><button class="btn btn-soft" data-action="add-category">Add</button></div><div class="choice-row">${state.categories.expense.filter(c=>!c.archived).map(c=>`<button class="choice" data-action="edit-category" data-id="${esc(c.id)}" data-type="expense">${esc(c.name)}</button>`).join('')}</div><div style="height:10px"></div><div class="choice-row">${state.categories.income.filter(c=>!c.archived).map(c=>`<button class="choice" data-action="edit-category" data-id="${esc(c.id)}" data-type="income">${esc(c.name)}</button>`).join('')}</div></div>
   <div class="card"><div class="section-head"><div><h2>Recurring entries</h2><span class="mini">Generated safely when MONEYLOG is opened.</span></div><button class="btn btn-soft" data-action="add-recurring">Add</button></div>${recurringDue.length?`<div class="list">${recurringDue.map(r=>`<div class="list-row"><span class="avatar">${ICONS.repeat}</span><span class="grow"><strong>${esc(r.name||r.categoryName||'Recurring')}</strong><small>${esc(r.frequency)} · next ${esc(r.nextDate)}</small></span><span class="money ${r.type==='income'?'positive':'negative'}">${esc(signedMoney(r.amountMinor,r.type))}</span><button class="btn btn-ghost btn-icon" data-action="edit-recurring" data-id="${esc(r.id)}">${ICONS.edit}</button></div>`).join('')}</div>`:`<div class="empty">No recurring entries yet.</div>`}</div></div>
   <div class="card section"><div class="section-head"><div><h2>Savings goals</h2><span class="mini">Planning progress; contributions do not move account balances automatically.</span></div><button class="btn btn-soft" data-action="add-goal">Add goal</button></div>${state.goals.length?`<div class="goal-grid">${state.goals.map(g=>goalCard(g)).join('')}</div>`:`<div class="empty">Create a goal such as “Emergency fund” or “New laptop”.</div>`}</div>
-  <div class="card section"><div class="section-head"><div><h2>App updates</h2><span class="mini">MONEYLOG checks its published version when online.</span></div><span class="pill">v${APP_VERSION}</span></div><div class="row" style="justify-content:space-between"><span class="muted">${updateInfo?`New version ${esc(updateInfo.version)} is available.`:'You are up to date.'}</span><button class="btn btn-soft" data-action="check-update">Check now</button></div></div>
+  <div class="card section"><div class="section-head"><div><h2>App updates</h2><span class="mini">Updates are checked quietly in the background when you are online.</span></div><span class="pill">v${APP_VERSION}</span></div><div class="row" style="justify-content:space-between"><span class="muted">${updateInfo?`Version ${esc(updateInfo.version)} is ready to install.`:'You are on the latest published version.'}</span><button class="btn btn-soft" data-action="check-update">Check now</button></div></div>
   <div class="card section developer-card"><div class="section-head"><div><h2>About MONEYLOG</h2><span class="mini">A private personal money journal.</span></div><span class="pill">v${APP_VERSION}</span></div><p class="muted">MONEYLOG is designed to make everyday money tracking simple: record income, expenses and transfers, understand where your money goes, and keep your records under your control.</p><div class="about-summary"><div><strong>Local first</strong><small>Your financial records stay on this device unless you export them.</small></div><div><strong>Encrypted</strong><small>Your vault and .moneylog backups are protected with authenticated encryption.</small></div><div><strong>Simple by design</strong><small>No banking, payments, ads, analytics, or complicated accounting workflows.</small></div></div><div class="developer-footer"><div><strong>Made with <span class="heart">♥</span> by nashihab</strong><small>Building small tools with care.</small></div><a class="btn btn-primary" href="https://nashihab.github.io" target="_blank" rel="noopener">Connect with the developer ↗</a></div></div>
   <div class="card section" style="border-color:color-mix(in srgb,var(--expense) 22%,var(--line))"><div class="section-head"><div><h2>Danger zone</h2><span class="mini">These actions are destructive.</span></div></div><div class="row" style="justify-content:space-between;gap:10px;flex-wrap:wrap"><span class="muted">Delete the local vault only when you intentionally want to start over. Browser cache/site-data cleanup can also remove local browser storage; use the .moneylog file for durable backup.</span><button class="btn btn-danger" data-action="wipe-data">Delete all data</button></div></div>`;
 }
@@ -491,7 +709,7 @@ async function scheduleReminder(){
     if('showTrigger' in Notification.prototype && typeof TimestampTrigger!=='undefined'){
       const existing=await reg.getNotifications({tag:'moneylog-daily-reminder',includeTriggered:true}).catch(()=>[]);
       existing.forEach(n=>n.close());
-      await reg.showNotification('MONEYLOG reminder',{tag:'moneylog-daily-reminder',body:'A quiet minute for today’s money log.',icon:'./icon.svg',showTrigger:new TimestampTrigger(when),data:{url:'./'}});
+      await reg.showNotification('MONEYLOG reminder',{tag:'moneylog-daily-reminder',body:'A quiet minute for today’s money log.',icon:'./assets/icon.svg',showTrigger:new TimestampTrigger(when),data:{url:'./'}});
       return;
     }
     if(reg.periodicSync){
@@ -505,7 +723,7 @@ async function checkReminderDue(){
   const hasToday=state.transactions.some(t=>t.date===todayISO());
   if(current>=target && !hasToday && state.settings.lastReminderDate!==todayISO()){
     state.settings.lastReminderDate=todayISO();await saveVault();
-    if('Notification' in window && Notification.permission==='granted' && 'serviceWorker' in navigator){try{(await navigator.serviceWorker.ready).showNotification('MONEYLOG reminder',{body:'You haven’t logged today yet. Add today’s income or expenses.',icon:'./icon.svg',data:{url:'./'}});}catch{}}
+    if('Notification' in window && Notification.permission==='granted' && 'serviceWorker' in navigator){try{(await navigator.serviceWorker.ready).showNotification('MONEYLOG reminder',{body:'You haven’t logged today yet. Add today’s income or expenses.',icon:'./assets/icon.svg',data:{url:'./'}});}catch{}}
     else showToast('Reminder: you have not logged today yet.');
   }
 }
@@ -521,7 +739,8 @@ function showToast(msg){const t=$('#toast');t.textContent=msg;t.classList.add('s
 function transactionForm(existing=null,forcedType='expense'){
   const type=existing?.type||forcedType;
   const defaultAcc=existing?.accountId||state.settings.defaultAccountId||state.accounts.find(a=>!a.archived)?.id||'';
-  const cat=existing?.categoryId||state.categories[type==='transfer'?'expense':type].find(c=>!c.archived)?.id||'';
+  const remembered=type==='expense'?state.settings.lastExpenseCategoryId:type==='income'?state.settings.lastIncomeCategoryId:'';
+  const cat=existing?.categoryId||remembered||state.categories[type==='transfer'?'expense':type].find(c=>!c.archived)?.id||'';
   modal(existing?'Edit transaction':'New transaction',`
     <form id="tx-form">
       <div class="choice-row" id="tx-type">${['expense','income','transfer'].map(t=>`<button type="button" class="choice ${type===t?'active':''}" data-tx-type="${t}">${t==='expense'?ICONS.expense:t==='income'?ICONS.income:ICONS.transfer} ${t[0].toUpperCase()+t.slice(1)}</button>`).join('')}</div>
@@ -534,6 +753,7 @@ function transactionForm(existing=null,forcedType='expense'){
     </form>`);
   const form=$('#tx-form');let txType=type;
   $$('#tx-type [data-tx-type]').forEach(btn=>btn.addEventListener('click',()=>{txType=btn.dataset.txType;updateTxFormType(txType)}));
+  setTimeout(()=>$('#tx-amount')?.focus(),80);
   form.addEventListener('submit',async e=>{e.preventDefault();await saveTransaction(existing,txType);});
   if(existing) $('#modal-root').dataset.editingId=existing.id;
 }
@@ -541,7 +761,7 @@ function updateTxFormType(type){
   $$('#tx-type [data-tx-type]').forEach(b=>b.classList.toggle('active',b.dataset.txType===type));
   const f=$('#tx-category-field'),tf=$('#tx-to-field'),cat=$('#tx-category');
   if(type==='transfer'){f.classList.add('hidden');tf.classList.remove('hidden');}
-  else {f.classList.remove('hidden');tf.classList.add('hidden');cat.innerHTML=categoryOptions(type,'');}
+  else {f.classList.remove('hidden');tf.classList.add('hidden');const remembered=type==='expense'?state.settings.lastExpenseCategoryId:state.settings.lastIncomeCategoryId;cat.innerHTML=categoryOptions(type,remembered||'');}
 }
 async function saveTransaction(existing,type){
   const amount=amountMajorToMinor($('#tx-amount').value); if(!amount)return showToast('Enter a valid amount.');
@@ -549,7 +769,10 @@ async function saveTransaction(existing,type){
   if(type==='transfer'&&(!toAccountId||toAccountId===accountId))return showToast('Choose two different accounts.');
   const tx={id:existing?.id||uuid(),type,amountMinor:amount,categoryId:type==='transfer'?'':$('#tx-category').value,accountId,toAccountId,date:$('#tx-date').value,time:$('#tx-time').value,note:$('#tx-note').value.trim(),updatedAt:new Date().toISOString()};
   if(existing){const i=state.transactions.findIndex(x=>x.id===existing.id);if(i>=0)state.transactions[i]=tx;}else state.transactions.push(tx);
-  state.settings.defaultAccountId=accountId;await saveVault();closeModal();resetAutoLockTimer();renderApp();showToast(existing?'Transaction updated.':'Saved.');await checkReminderDue();
+  state.settings.defaultAccountId=accountId;
+  if(type==='expense')state.settings.lastExpenseCategoryId=tx.categoryId;
+  if(type==='income')state.settings.lastIncomeCategoryId=tx.categoryId;
+  await saveVault();closeModal();resetAutoLockTimer();renderApp();showToast(existing?'Transaction updated.':'Saved.');await checkReminderDue();
 }
 
 function accountForm(existing=null){
@@ -586,7 +809,7 @@ async function processRecurring(){
 
 async function changePassword(){
   modal('Change MONEYLOG password',`<form id="pw-form"><div class="field"><label>Current password</label><input id="pw-old" class="input" type="password" required autocomplete="current-password"></div><div class="field" style="margin-top:12px"><label>New password</label><input id="pw-new" class="input" type="password" minlength="8" required autocomplete="new-password"></div><div class="field" style="margin-top:12px"><label>Confirm new password</label><input id="pw-confirm" class="input" type="password" minlength="8" required autocomplete="new-password"></div><div class="field" style="margin-top:12px"><label>Recovery code</label><input id="pw-recovery" class="input" required placeholder="Required to keep password recovery working"></div><div class="install-hint" style="margin-top:12px">Your recovery code is used to wrap the new password key. It is not stored in plain text.</div><div class="modal-actions"><button type="button" class="btn btn-ghost" data-action="close-modal">Cancel</button><button class="btn btn-primary">Change password</button></div></form>`);
-  $('#pw-form').addEventListener('submit',async e=>{e.preventDefault();const old=$('#pw-old').value,n=$('#pw-new').value,c=$('#pw-confirm').value,rcode=$('#pw-recovery').value.trim();if(n.length<8||n!==c)return showToast('Check the new password.');try{const meta=await idbGet('meta','security'),recovery=await idbGet('meta','recovery');const oldKey=await deriveKey(old,b64ToBytes(meta.salt));const check=await decryptText(meta.check,oldKey);if(!['MONEYLOG-PASSWORD-CHECK-v2','MONEYLOG-PASSWORD-CHECK-v3'].includes(check))throw new Error('WRONG');if(!recovery)throw new Error('NO_RECOVERY');const rkey=await deriveKey(rcode,b64ToBytes(recovery.salt));await decryptText(recovery.wrapped,rkey);const salt=crypto.getRandomValues(new Uint8Array(16)),key=await deriveKey(n,salt),newCheck=await encryptText('MONEYLOG-PASSWORD-CHECK-v3',key);const newRKey=await deriveKey(rcode,b64ToBytes(recovery.salt)),wrapped=await encryptText(bytesToB64(await exportKeyRaw(key)),newRKey);sessionKey=key;await idbPut('meta',{key:'security',salt:bytesToB64(salt),check:newCheck});await idbPut('meta',{key:'recovery',username:recovery.username,salt:recovery.salt,wrapped});await saveVault();closeModal();showToast('Password changed.');}catch(err){showToast(err.message==='NO_RECOVERY'?'Set up a recovery method first.':'Current password or recovery code is not correct.');}});
+  $('#pw-form').addEventListener('submit',async e=>{e.preventDefault();const old=$('#pw-old').value,n=$('#pw-new').value,c=$('#pw-confirm').value,rcode=$('#pw-recovery').value.trim();if(n.length<8||n!==c)return showToast('Check the new password.');try{const meta=await idbGet('meta','security'),recovery=await idbGet('meta','recovery');const oldKey=await deriveKey(old,b64ToBytes(meta.salt));const check=await decryptText(meta.check,oldKey);if(!['MONEYLOG-PASSWORD-CHECK-v2','MONEYLOG-PASSWORD-CHECK-v3'].includes(check))throw new Error('WRONG');if(!recovery)throw new Error('NO_RECOVERY');const rkey=await deriveKey(rcode,b64ToBytes(recovery.salt));await decryptText(recovery.wrapped,rkey);const salt=crypto.getRandomValues(new Uint8Array(16)),key=await deriveKey(n,salt),newCheck=await encryptText('MONEYLOG-PASSWORD-CHECK-v3',key);const newRKey=await deriveKey(rcode,b64ToBytes(recovery.salt)),wrapped=await encryptText(bytesToB64(await exportKeyRaw(key)),newRKey);sessionKey=key;await idbPut('meta',{key:'security',salt:bytesToB64(salt),check:newCheck});await idbPut('meta',{key:'recovery',username:recovery.username,salt:recovery.salt,wrapped});await saveVault();const protectedMeta=await idbGet('meta','protectedBackup').catch(()=>null);if(protectedMeta?.handle){const wrapSalt=crypto.getRandomValues(new Uint8Array(16)),wrapKey=await deriveKey(n,wrapSalt),wrappedKey=await encryptText(bytesToB64(await exportKeyRaw(key)),wrapKey);if(await saveProtectedEnvelope(protectedMeta.handle,bytesToB64(wrapSalt),wrappedKey)){} }closeModal();showToast('Password changed and protection refreshed.');}catch(err){showToast(err.message==='NO_RECOVERY'?'Set up a recovery method first.':'Current password or recovery code is not correct.');}});
 }
 
 async function exportBackup(){
@@ -598,9 +821,11 @@ async function restoreBackup(file){
 function exportCSV(){const rows=[['Date','Type','Category','Account','To account','Amount','Note'],...filteredTransactions().map(t=>[t.date,t.type,t.type==='transfer'?'Transfer':categoryName(t.type,t.categoryId),accountName(t.accountId),accountName(t.toAccountId),(t.type==='expense'?-1:t.type==='income'?1:1)*(t.amountMinor/100),t.note||''])];const csv=rows.map(r=>r.map(x=>`"${String(x).replace(/"/g,'""')}"`).join(',')).join('\n');const blob=new Blob([csv],{type:'text/csv'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`moneylog-${todayISO()}.csv`;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);}
 
 async function saveDurableBackup(){
+  let handle=null;
+  if(window.showSaveFilePicker){try{[handle]=await window.showSaveFilePicker({suggestedName:'moneylog-vault.moneylog',types:[{description:'MONEYLOG encrypted vault',accept:{'application/octet-stream':['.moneylog']}}]});}catch(err){if(err?.name==='AbortError')return;}}
   const p=prompt('Create a password for this durable .moneylog file (8+ characters).');if(!p)return;if(p.length<8)return showToast('Use at least 8 characters.');
   const salt=crypto.getRandomValues(new Uint8Array(16)),key=await deriveKey(p,salt),payload={format:'moneylog',version:3,exportedAt:new Date().toISOString(),state};const encrypted=await encryptText(JSON.stringify(payload),key);const bytes=new Blob([JSON.stringify({magic:'MONEYLOG',version:3,salt:bytesToB64(salt),...encrypted})],{type:'application/octet-stream'});
-  if(window.showSaveFilePicker){try{const handle=await window.showSaveFilePicker({suggestedName:'moneylog-vault.moneylog',types:[{description:'MONEYLOG encrypted vault',accept:{'application/octet-stream':['.moneylog']}}]});const writable=await handle.createWritable();await writable.write(bytes);await writable.close();state.settings.durableBackupName=handle.name||'moneylog-vault.moneylog';await saveVault();showToast('Durable vault file saved.');return;}catch(err){if(err?.name==='AbortError')return;}}
+  if(handle){try{const writable=await handle.createWritable();await writable.write(bytes);await writable.close();state.settings.durableBackupName=handle.name||'moneylog-vault.moneylog';await saveVault();showToast('Durable vault file saved.');return;}catch{showToast('The file could not be written.');return;}}
   const a=document.createElement('a');a.href=URL.createObjectURL(bytes);a.download='moneylog-vault.moneylog';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);showToast('Encrypted vault file downloaded. Keep it safe.');
 }
 function isInstalledWebApp(){
@@ -609,7 +834,7 @@ function isInstalledWebApp(){
 function maybeShowInstallChoice(){
   if(isInstalledWebApp())return;
   if(localStorage.getItem('moneylog-entry-choice'))return;
-  setTimeout(()=>{if($('#modal-root').dataset.open)return;modal('Choose your MONEYLOG experience',`<p class="muted">MONEYLOG works in your browser, but the installed Web App is the recommended way to use it every day.</p><div class="install-choice-grid"><button class="install-option install-option-primary" data-action="install-choice" data-choice="install"><span class="install-option-icon">⇩</span><span><strong>Install Web App <em class="recommended-badge">Recommended</em></strong><small>Own app icon, app-style window, easier daily access.</small></span></button><button class="install-option" data-action="install-choice" data-choice="web"><span class="install-option-icon">↗</span><span><strong>Use Web Version</strong><small>No installation • opens directly in the browser</small></span></button></div><div class="web-warning"><strong>Recommended: install the Web App.</strong><br>The browser version depends on browser storage. Clearing site data or browser storage may remove the local vault. Keep an encrypted <code>.moneylog</code> file outside the browser.</div>`);},250);
+  setTimeout(()=>{if($('#modal-root').dataset.open)return;modal('Choose your MONEYLOG experience',`<p class="muted">MONEYLOG works in your browser, but the installed Web App is the recommended way to use it every day.</p><div class="install-choice-grid"><button class="install-option install-option-primary" data-action="install-choice" data-choice="install"><span class="install-option-icon">⇩</span><span><strong>Install Web App <em class="recommended-badge">Recommended</em></strong><small>Own app icon, app-style window, easier daily access.</small></span></button><button class="install-option" data-action="install-choice" data-choice="web"><span class="install-option-icon">↗</span><span><strong>Use Web Version</strong><small>No installation • opens directly in the browser</small></span></button></div><div class="web-warning"><strong>Recommended: install the Web App.</strong><br>Browser storage is still controlled by the device. Data Shield adds persistent-storage protection and an encrypted file outside site storage for recovery.</div>`);},250);
 }
 async function toggleInstall(){
   if(isInstalledWebApp()){showToast('MONEYLOG is already installed.');return;}
@@ -636,7 +861,31 @@ async function checkForUpdate(force=false){
     }else {updateInfo=null;}
   }catch{}
 }
-function openUpdateModal(){if(!updateInfo||$('#modal-root').dataset.open)return;modal(updateInfo.title||'MONEYLOG update',`<p>A newer version <strong>${esc(updateInfo.version)}</strong> is ready.</p><div class="install-hint">${esc((updateInfo.notes||[]).join(' · '))}</div><div class="modal-actions"><button class="btn btn-ghost" data-action="remind-update">Remind me later</button><button class="btn btn-primary" data-action="apply-update">Update now</button></div>`);}
+function openUpdateModal(){
+  if(!updateInfo||$('#modal-root').dataset.open)return;
+  modal(updateInfo.title||'MONEYLOG update',`<p class="update-lead">A newer MONEYLOG version <strong>${esc(updateInfo.version)}</strong> is ready.</p><div class="update-notes">${(updateInfo.notes||[]).map(n=>`<div><span>${ICONS.check}</span>${esc(n)}</div>`).join('')}</div><div class="modal-actions"><button class="btn btn-ghost" data-action="remind-update">Remind me later</button><button class="btn btn-primary" data-action="apply-update">Update smoothly</button></div>`);
+}
+function showUpdateProgress(){
+  if(updateUiOpen)return;updateUiOpen=true;
+  modal('Updating MONEYLOG',`<div class="update-progress"><div class="update-spinner"></div><strong id="update-progress-title">Preparing the new version…</strong><span id="update-progress-copy">Your encrypted vault stays in local storage. MONEYLOG will reopen after the new app shell is active.</span><div class="update-steps"><span class="active">Prepare</span><span>Install</span><span>Reload</span></div></div>`,{wide:false});
+}
+function updateProgress(title,copy,step=0){$('#update-progress-title')?.replaceChildren(document.createTextNode(title));$('#update-progress-copy')?.replaceChildren(document.createTextNode(copy));$$('.update-steps span').forEach((el,i)=>el.classList.toggle('active',i<=step));}
+async function applyUpdate(){
+  if(updateReloadPending)return;
+  updateReloadPending=true;showUpdateProgress();
+  try{
+    const reg=await navigator.serviceWorker.ready;
+    updateProgress('Checking the new app shell…','MONEYLOG is refreshing its offline files before switching versions.',0);
+    await reg.update();
+    const activate=worker=>{if(!worker)return;worker.postMessage({type:'SKIP_WAITING'});};
+    if(reg.waiting){updateProgress('Installing the update…','The new files are ready. Switching without changing your financial records.',1);activate(reg.waiting);return;}
+    if(reg.installing){
+      updateProgress('Installing the update…','Downloading the new app shell in the background.',1);
+      reg.installing.addEventListener('statechange',()=>{if(reg.installing?.state==='installed'){activate(reg.installing);}});return;
+    }
+    updateProgress('Finishing up…','Restarting MONEYLOG with the latest files.',2);setTimeout(()=>location.reload(),500);
+  }catch{updateProgress('Finishing up…','The browser could not complete the background handoff, so MONEYLOG will reopen cleanly.',2);setTimeout(()=>location.reload(),650);}
+}
 function compareVersions(a,b){const aa=String(a||'0').split('.').map(Number),bb=String(b||'0').split('.').map(Number);for(let i=0;i<Math.max(aa.length,bb.length);i++){const x=aa[i]||0,y=bb[i]||0;if(x!==y)return x-y;}return 0;}
 async function applyUpdate(){
   try{
@@ -650,7 +899,7 @@ async function registerSW(){
   if(!('serviceWorker' in navigator))return;
   try{
     const reg=await navigator.serviceWorker.register('./sw.js');
-    navigator.serviceWorker.addEventListener('controllerchange',()=>{location.reload();});
+    navigator.serviceWorker.addEventListener('controllerchange',()=>{if(updateReloadPending){updateProgress('Update complete','Reopening MONEYLOG with the new version.',2);setTimeout(()=>location.reload(),180);}});
     if(reg.waiting&&navigator.serviceWorker.controller) updateInfo=updateInfo||null;
   }catch{}
 }
@@ -679,6 +928,7 @@ $('#app').addEventListener('click',async e=>{
     else if(action==='export-backup')exportBackup();
     else if(action==='export-csv')exportCSV();
     else if(action==='install')await toggleInstall();
+    else if(action==='use-web'){localStorage.setItem('moneylog-entry-choice','web');closeModal();showToast('MONEYLOG will stay in the browser. Keep Data Shield enabled for recovery.');}
     else if(action==='install-choice'){localStorage.setItem('moneylog-entry-choice',el.dataset.choice);if(el.dataset.choice==='install')await toggleInstall();else{closeModal();showToast('Web version selected. Keep a .moneylog backup somewhere safe.');}}
     else if(action==='forgot-password')recoveryPasswordForm();
     else if(action==='save-durable-backup')saveDurableBackup();
@@ -690,6 +940,9 @@ $('#app').addEventListener('click',async e=>{
     else if(action==='remind-update'){if(updateInfo)localStorage.setItem('moneylog-update-dismiss-'+updateInfo.version,String(Date.now()));closeModal();showToast('Okay. I’ll remind you later.');}
     else if(action==='apply-update'){closeModal();await applyUpdate();}
     else if(action==='check-update'){await checkForUpdate(true);showToast(updateInfo?`Version ${updateInfo.version} is available.`:'You are up to date.');renderApp();}
+    else if(action==='setup-data-shield')await enableProtectedBackup();
+    else if(action==='restore-protected')await pickProtectedRestore();
+    else if(action==='connect-protected')await connectProtectedFile();
     else if(action==='clear-filters'){historyFilters={q:'',type:'all',account:'all',category:'all',from:'',to:''};renderApp();}
   }catch(err){console.error(err);showToast('Something went wrong. Your data was not intentionally deleted.');}
 });
@@ -724,7 +977,7 @@ function renderInsightsForRange(kind){
   let html=insightsViewDynamic(kind);root.innerHTML=html;
 }
 function insightsViewDynamic(kind){
-  const range=dateRange(kind),totals=periodTotals(range.from,range.to);const expenseByCat={};state.transactions.filter(t=>t.type==='expense'&&t.date>=range.from&&t.date<=range.to).forEach(t=>{const n=categoryName('expense',t.categoryId);expenseByCat[n]=(expenseByCat[n]||0)+t.amountMinor;});const ranked=Object.entries(expenseByCat).sort((a,b)=>b[1]-a[1]).slice(0,8),max=ranked[0]?.[1]||1;const months=[];const now=new Date(`${todayISO()}T00:00:00`);for(let i=5;i>=0;i--){const d=new Date(now.getFullYear(),now.getMonth()-i,1),key=d.toISOString().slice(0,7),last=new Date(d.getFullYear(),d.getMonth()+1,0).getDate();months.push({label:d.toLocaleDateString('en-BD',{month:'short'}),...periodTotals(`${key}-01`,`${key}-${last}`)});}const trendMax=Math.max(1,...months.map(m=>Math.max(m.income,m.expense)));return `<div class="topbar"><div><div class="kicker">UNDERSTAND YOUR MONEY</div><h1 class="page-title">Insights</h1></div><div class="top-actions"><select class="select" id="insight-range" style="width:auto">${['week','thisMonth','lastMonth','3Months','year'].map(x=>`<option value="${x}" ${x===kind?'selected':''}>${x==='week'?'This week':x==='thisMonth'?'This month':x==='lastMonth'?'Last month':x==='3Months'?'Last 3 months':'This year'}</option>`).join('')}</select><button class="btn btn-ghost btn-icon top-lock" data-action="lock" aria-label="Lock MONEYLOG" title="Lock MONEYLOG">${ICONS.lock}</button></div></div><div class="grid grid-3"><div class="card stat"><div class="label">INCOME</div><strong class="income">${esc(formatMoney(totals.income))}</strong><small class="muted">${esc(fmtDate(range.from))} → ${esc(fmtDate(range.to))}</small></div><div class="card stat"><div class="label">EXPENSE</div><strong class="expense">${esc(formatMoney(totals.expense))}</strong><small class="muted">Transfers excluded</small></div><div class="card stat"><div class="label">NET FLOW</div><strong class="${totals.income-totals.expense>=0?'income':'expense'}">${esc(formatMoney(totals.income-totals.expense))}</strong><small class="muted">Income minus expenses</small></div></div><div class="grid grid-2 section"><div class="card"><div class="section-head"><h2>Where it goes</h2><span class="mini">Selected period</span></div>${ranked.length?`<div class="chart">${ranked.map(([name,val])=>`<div class="bar-item"><span class="truncate">${esc(name)}</span><div class="bar-track"><span style="width:${val/max*100}%"></span></div><strong style="text-align:right">${esc(formatMoney(val,true))}</strong></div>`).join('')}</div>`:`<div class="empty"><strong>No expenses yet.</strong>No category spending for this period.</div>`}</div><div class="card"><div class="section-head"><h2>Six-month flow</h2><span class="mini">Context</span></div><div class="chart">${months.map(m=>`<div><div class="row" style="justify-content:space-between"><span class="mini">${esc(m.label)}</span><span class="mini">${esc(formatMoney(m.income,true))} in · ${esc(formatMoney(m.expense,true))} out</span></div><div class="progress" style="margin-top:5px"><span style="width:${m.income/trendMax*100}%;background:var(--income)"></span></div><div class="progress" style="margin-top:4px"><span style="width:${m.expense/trendMax*100}%;background:var(--expense)"></span></div></div>`).join('')}</div></div></div><div class="section"><div class="section-head"><h2>Account picture</h2></div><div class="accounts-grid">${state.accounts.map(a=>`<div class="account-card"><span class="pill">${esc(a.type)}</span><strong>${esc(a.name)}</strong>${a.archived?'<span class="account-type">Archived</span>':''}<div class="amount">${esc(formatMoney(balanceForAccount(a.id)))}</div><small class="muted">Opening ${esc(formatMoney(a.openingMinor))}</small></div>`).join('')}</div></div>`;}
+  const range=dateRange(kind),totals=periodTotals(range.from,range.to);const expenseByCat={};state.transactions.filter(t=>t.type==='expense'&&t.date>=range.from&&t.date<=range.to).forEach(t=>{const n=categoryName('expense',t.categoryId);expenseByCat[n]=(expenseByCat[n]||0)+t.amountMinor;});const ranked=Object.entries(expenseByCat).sort((a,b)=>b[1]-a[1]).slice(0,8),max=ranked[0]?.[1]||1;const months=[];const now=new Date(`${todayISO()}T00:00:00`);for(let i=5;i>=0;i--){const d=new Date(now.getFullYear(),now.getMonth()-i,1),key=d.toISOString().slice(0,7),last=new Date(d.getFullYear(),d.getMonth()+1,0).getDate();months.push({label:d.toLocaleDateString('en-BD',{month:'short'}),...periodTotals(`${key}-01`,`${key}-${last}`)});}const trendMax=Math.max(1,...months.map(m=>Math.max(m.income,m.expense)));return `<div class="topbar"><div><div class="kicker">UNDERSTAND YOUR MONEY</div><h1 class="page-title">Insights</h1></div><div class="top-actions"><select class="select" id="insight-range" style="width:auto">${['week','thisMonth','lastMonth','3Months','year'].map(x=>`<option value="${x}" ${x===kind?'selected':''}>${x==='week'?'This week':x==='thisMonth'?'This month':x==='lastMonth'?'Last month':x==='3Months'?'Last 3 months':'This year'}</option>`).join('')}</select><button class="btn btn-ghost btn-icon top-lock" data-action="lock" aria-label="Lock MONEYLOG" title="Lock MONEYLOG"><span class="top-lock-circle">${ICONS.lock}</span></button></div></div><div class="grid grid-3"><div class="card stat"><div class="label">INCOME</div><strong class="income">${esc(formatMoney(totals.income))}</strong><small class="muted">${esc(fmtDate(range.from))} → ${esc(fmtDate(range.to))}</small></div><div class="card stat"><div class="label">EXPENSE</div><strong class="expense">${esc(formatMoney(totals.expense))}</strong><small class="muted">Transfers excluded</small></div><div class="card stat"><div class="label">NET FLOW</div><strong class="${totals.income-totals.expense>=0?'income':'expense'}">${esc(formatMoney(totals.income-totals.expense))}</strong><small class="muted">Income minus expenses</small></div></div><div class="grid grid-2 section"><div class="card"><div class="section-head"><h2>Where it goes</h2><span class="mini">Selected period</span></div>${ranked.length?`<div class="chart">${ranked.map(([name,val])=>`<div class="bar-item"><span class="truncate">${esc(name)}</span><div class="bar-track"><span style="width:${val/max*100}%"></span></div><strong style="text-align:right">${esc(formatMoney(val,true))}</strong></div>`).join('')}</div>`:`<div class="empty"><strong>No expenses yet.</strong>No category spending for this period.</div>`}</div><div class="card"><div class="section-head"><h2>Six-month flow</h2><span class="mini">Context</span></div><div class="chart">${months.map(m=>`<div><div class="row" style="justify-content:space-between"><span class="mini">${esc(m.label)}</span><span class="mini">${esc(formatMoney(m.income,true))} in · ${esc(formatMoney(m.expense,true))} out</span></div><div class="progress" style="margin-top:5px"><span style="width:${m.income/trendMax*100}%;background:var(--income)"></span></div><div class="progress" style="margin-top:4px"><span style="width:${m.expense/trendMax*100}%;background:var(--expense)"></span></div></div>`).join('')}</div></div></div><div class="section"><div class="section-head"><h2>Account picture</h2></div><div class="accounts-grid">${state.accounts.map(a=>`<div class="account-card"><span class="pill">${esc(a.type)}</span><strong>${esc(a.name)}</strong>${a.archived?'<span class="account-type">Archived</span>':''}<div class="amount">${esc(formatMoney(balanceForAccount(a.id)))}</div><small class="muted">Opening ${esc(formatMoney(a.openingMinor))}</small></div>`).join('')}</div></div>`;}
 
 window.addEventListener('beforeinstallprompt',e=>{
   if(isInstalledWebApp())return;
@@ -732,8 +985,19 @@ window.addEventListener('beforeinstallprompt',e=>{
   deferredInstallPrompt=e;
   if(state && !$('#modal-root').dataset.open && !localStorage.getItem('moneylog-entry-choice')) maybeShowInstallChoice();
 });
-window.addEventListener('appinstalled',()=>{localStorage.setItem('moneylog-installed','1');localStorage.setItem('moneylog-entry-choice','install');deferredInstallPrompt=null;closeModal();showToast('MONEYLOG was installed.');});
-window.addEventListener('online',()=>checkForUpdate(true));
+function maybeShowDataShieldPrompt(attempt=0){
+  if(!state||storageProtectionStatus.backup)return;
+  try{if(localStorage.getItem('moneylog-shield-prompted')==='1')return;}catch{}
+  setTimeout(()=>{
+    if($('#modal-root').dataset.open){ if(attempt<8) maybeShowDataShieldPrompt(attempt+1); return; }
+    try{localStorage.setItem('moneylog-shield-prompted','1');}catch{}
+    modal('Protect your MONEYLOG vault',`<p class="muted">Your records are local by design. Data Shield adds a second layer for browser storage cleanup: persistent storage when the browser allows it, plus an encrypted recovery file you control.</p><div class="shield-prompt"><div><span class="shield-prompt-icon">${ICONS.shield}</span><div><strong>One-time setup</strong><small>Choose a protected .moneylog file and MONEYLOG will keep it updated while you use the app.</small></div></div></div><div class="web-warning"><strong>Important:</strong> a full browser "Cookies and other site data" wipe can remove IndexedDB and other site storage. The protected file is the recovery path outside that storage.</div><div class="modal-actions"><button class="btn btn-ghost" data-action="close-modal">Later</button><button class="btn btn-primary" data-action="setup-data-shield">Protect my data</button></div>`);
+  },450);
+}
+
+window.addEventListener('appinstalled',()=>{localStorage.setItem('moneylog-installed','1');localStorage.setItem('moneylog-entry-choice','install');deferredInstallPrompt=null;closeModal();showToast('MONEYLOG was installed.');if(state){requestPersistentStorage().then(()=>refreshStorageProtectionStatus()).then(()=>maybeShowDataShieldPrompt());}});
+window.addEventListener('online',()=>{checkForUpdate(true);if(state){refreshStorageProtectionStatus().then(()=>renderApp());}});
+window.addEventListener('offline',()=>{if(state)renderApp();});
 window.addEventListener('focus',()=>{if(state){checkForUpdate();checkReminderDue();}});
 
 $('#modal-root').addEventListener('click',async e=>{
@@ -754,6 +1018,7 @@ $('#modal-root').addEventListener('click',async e=>{
     else if(action==='delete-recurring'){const id=$('#modal-root').dataset.editingId; if(id){state.recurring=state.recurring.filter(r=>r.id!==id);await saveVault();closeModal();renderApp();showToast('Recurring entry removed.');}}
     else if(action==='remind-update'){if(updateInfo)localStorage.setItem('moneylog-update-dismiss-'+updateInfo.version,String(Date.now()));closeModal();showToast('Okay. I’ll remind you later.');}
     else if(action==='apply-update'){closeModal();await applyUpdate();}
+    else if(action==='setup-data-shield')await enableProtectedBackup();
   }catch(err){console.error(err);showToast('Something went wrong.');}
 });
 matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change',()=>{if(state&&state.settings.theme==='system')applyTheme();});
@@ -763,7 +1028,7 @@ window.addEventListener('pageshow',()=>{if(state)resetAutoLockTimer();});
 
 (async function boot(){
   try{
-    db=await openDB(); await registerSW();
+    db=await openDB(); await refreshStorageProtectionStatus(); await registerSW();
     const security=await idbGet('meta','security');
     if(!security){ clearSession(); await setupPassword(); }
     else if(await resumeSessionAfterRefresh()){ await finishUnlock(); }
