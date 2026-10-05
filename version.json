@@ -1,12 +1,13 @@
 {
-  "version":"2.0.0",
+  "version":"2.1.0",
   "released":"2026-10-05",
-  "title":"MONEYLOG 2.0",
+  "title":"MONEYLOG 2.1",
   "notes":[
-    "New finance-first interface",
-    "Password-protected encrypted local vault",
-    "Update prompts with Remind me later",
-    "Daily journal reminder",
-    "Better history filters, budgets, goals and recurring entries"
+    "Username, password and recovery-code vault setup",
+    "Install Web App or Use Web Version choice",
+    "Durable encrypted .moneylog vault file workflow",
+    "Glass UI polish and stronger dark-mode text contrast",
+    "Duplicate Cash cleanup and safer local-storage warnings",
+    "Made with love by nashihab"
   ]
 }
