@@ -50,8 +50,28 @@ Made with ♥ by nashihab
 
 Developer: https://nashihab.github.io
 
-## Refresh and locking
-Refreshing the app does not intentionally lock the current session. MONEYLOG restores the active encrypted session after a refresh while the selected auto-lock period has not expired. Use the Lock control when you want to end the session immediately.
+## Copyright & Usage
+
+Copyright © 2026 nashihab. All rights reserved.
+
+MONEYLOG and its source code, design, interface, assets, documentation, and related materials are the original work of **nashihab**.
+
+You may view the repository for personal, educational, and reference purposes. You may also fork the repository for development or experimentation, provided that the original copyright notice and attribution remain intact.
+
+**You may not:**
+
+* Re-upload or republish this project or substantial portions of it as your own work.
+* Remove, replace, or obscure the original copyright and attribution.
+* Publish a modified or unmodified copy under your own name or organization as an original project.
+* Sell, redistribute, or commercially package this project without written permission from the copyright holder.
+* Use the project branding, name, or identity in a way that implies ownership or official endorsement.
+
+Modifications and derivative versions must clearly state that they are based on the original MONEYLOG project by **nashihab** and must retain the original copyright notice.
+
+This repository does **not** grant permission to claim authorship or ownership of the original work.
+
+For permissions beyond those stated above, contact the copyright holder.
+
 
 ## 2.1.4 UI refresh
 
