@@ -1,13 +1,12 @@
 {
-  "version": "2.1.3",
+  "version": "2.1.4",
   "released": "2026-10-05",
-  "title": "MONEYLOG 2.1.3",
+  "title": "MONEYLOG 2.1.4",
   "notes": [
-    "Redesigned mobile navigation with a dedicated Add action",
-    "Lock moved to the top action area",
-    "Refresh preserves the active session until auto-lock or explicit lock",
-    "Glass surface and mobile interaction refinements",
-    "Cleaner account labels and stronger dark-mode contrast",
-    "Light theme remains the default"
+    "Removed duplicate top-level Add actions",
+    "Centered and aligned the bottom Add action",
+    "Tighter typography and spacing across the app",
+    "Replaced the old lock glyph with a clear lock icon",
+    "Modernized the mobile navigation and surface hierarchy"
   ]
 }

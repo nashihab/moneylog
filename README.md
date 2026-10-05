@@ -52,3 +52,7 @@ Developer: https://nashihab.github.io
 
 ## Refresh and locking
 Refreshing the app does not intentionally lock the current session. MONEYLOG restores the active encrypted session after a refresh while the selected auto-lock period has not expired. Use the Lock control when you want to end the session immediately.
+
+## 2.1.4 UI refresh
+
+The current interface uses a tighter type scale, a centered five-item mobile navigation, a dedicated Add action, and a standard lock icon. The layout is designed to feel compact and app-like rather than oversized or template-like.
