@@ -1,4 +1,4 @@
-# MONEYLOG — User Guide
+# MONEYLOG : User Guide
 
 ## What is MONEYLOG?
 MONEYLOG is a private personal money journal. Use it to record income, expenses, transfers, budgets, goals and recurring entries, then understand your money through simple history and insights.
@@ -20,9 +20,9 @@ The username is only for this device; it is not an online account. Your recovery
 ## Everyday use
 From Home, you can quickly add:
 
-**Expense** — money you spent.  
-**Income** — money you received.  
-**Transfer** — money moved between your own accounts.
+**Expense** - money you spent.  
+**Income** - money you received.  
+**Transfer** - money moved between your own accounts.
 
 Transfers do not count as income or expenses.
 
