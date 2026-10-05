@@ -1,13 +1,12 @@
 {
-  "version":"2.5.1",
-  "released":"2026-10-05",
-  "title":"MONEYLOG 2.5.1",
-  "notes":[
-    "Fixed one-tap updates so the open app refreshes to the new version without requiring a close and reopen",
-    "Hardened the direct app-cache refresh fallback so refreshed files are served on the next reload",
-    "Fixed the Home mobile spacing caused by the wrapped top action row",
-    "Made the browser version open as a read-only Home preview before setup",
-    "Entering a real action from the browser preview now takes you directly to secure account setup",
-    "Polished transitions and interaction timing across the main UI"
+  "version": "2.5.2",
+  "released": "2026-10-05",
+  "title": "MONEYLOG 2.5.2",
+  "notes": [
+    "Made sign-up and sign-in screens keyboard-safe on mobile so focused fields and actions remain reachable",
+    "Hardened Check now to perform a fresh network version check immediately and report connection failures honestly",
+    "Service worker update checks now refresh the registration before comparing the published version",
+    "Improved update reminder handling so available versions are surfaced without losing a later reminder",
+    "Added viewport-aware focus handling and small interaction reliability fixes"
   ]
 }

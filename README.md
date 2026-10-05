@@ -239,6 +239,13 @@ for a local username, password, and recovery code. After setup, the normal priva
 local-vault experience continues as usual. The explicit `demo.html` and `?demo=1`
 entry points remain available for the same read-only preview.
 
+## 2.5.2
+
+This release makes the sign-in and sign-up screens keyboard-safe on mobile, hardens the
+manual update check so it performs a fresh version lookup immediately, reports connection
+failures honestly, refreshes the service-worker registration before comparison, and improves
+update reminder handling. It also adds small viewport-aware interaction reliability fixes.
+
 ## 2.5.1
 
 This release fixes the in-place update handoff, removes the Home mobile spacing issue,

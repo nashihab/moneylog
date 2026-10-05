@@ -1,5 +1,5 @@
 /* MONEYLOG PWA - local-first encrypted personal finance journal */
-const APP_VERSION = '2.5.1';
+const APP_VERSION = '2.5.2';
 const UPDATE_MANIFEST_URL = './version.json';
 const DB_NAME = 'moneylog-secure-v2';
 const DB_VERSION = 1;
@@ -867,14 +867,30 @@ function installInstructions(){
 
 async function checkForUpdate(force=false){
   try{
-    const last=Number(localStorage.getItem('moneylog-update-check')||0);if(!force&&Date.now()-last<15*60*1000)return;
+    const last=Number(localStorage.getItem('moneylog-update-check')||0);
+    if(!force&&Date.now()-last<15*60*1000)return {status:'skipped'};
     localStorage.setItem('moneylog-update-check',String(Date.now()));
-    const res=await fetch(`${UPDATE_MANIFEST_URL}?t=${Date.now()}`,{cache:'no-store'});if(!res.ok)return;const info=await res.json();
+    const reg=await navigator.serviceWorker?.getRegistration?.();
+    if(reg) await reg.update().catch(()=>{});
+    const stamp=`${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const res=await fetch(`${UPDATE_MANIFEST_URL}?check=${stamp}`,{cache:'no-store',headers:{'Cache-Control':'no-cache'}});
+    if(!res.ok) return {status:'error',reason:'HTTP_'+res.status};
+    const info=await res.json();
     if(compareVersions(info.version,APP_VERSION)>0){
+      updateInfo=info;
       const dismissed=Number(localStorage.getItem('moneylog-update-dismiss-'+info.version)||0);
-      if(!dismissed||Date.now()-dismissed>REMIND_LATER_MS){updateInfo=info;if(state){renderApp();setTimeout(()=>openUpdateModal(),160);}}
-    }else {updateInfo=null;}
-  }catch{}
+      const shouldRemind=!dismissed||Date.now()-dismissed>REMIND_LATER_MS;
+      if(state) renderApp();
+      if(state&&shouldRemind)setTimeout(()=>openUpdateModal(),160);
+      return {status:'available',version:info.version,reminded:shouldRemind,info};
+    }
+    updateInfo=null;
+    if(state) renderApp();
+    return {status:'current',version:info.version,info};
+  }catch(err){
+    console.error('MONEYLOG update check failed',err);
+    return {status:'error',reason:err?.message||'NETWORK_ERROR'};
+  }
 }
 function openUpdateModal(){
   if(!updateInfo||$('#modal-root').dataset.open)return;
@@ -1043,7 +1059,7 @@ $('#app').addEventListener('click',async e=>{
   const el=e.target.closest('[data-action]');if(!el)return;const action=el.dataset.action;const id=el.dataset.id;
   try{
     if(action==='start-demo-signup'){exitDemoToSignup();return;}
-    const demoMutations=new Set(['add','quick-expense','quick-income','quick-transfer','edit-tx','delete-tx','add-account','edit-account','add-category','edit-category','add-goal','edit-goal','add-recurring','edit-recurring','change-password','save-budget','theme','setting-hide','setting-autolock','setting-currency','setting-reminder','export-backup','export-csv','setup-data-shield','restore-protected','connect-protected']);
+    const demoMutations=new Set(['toggle-hide','add','quick-expense','quick-income','quick-transfer','edit-tx','delete-tx','add-account','edit-account','add-category','edit-category','add-goal','edit-goal','add-recurring','edit-recurring','change-password','save-budget','theme','setting-hide','setting-autolock','setting-currency','setting-reminder','export-backup','export-csv','setup-data-shield','restore-protected','connect-protected']);
     if(demoMode&&demoMutations.has(action)){openDemoSignup();return;}
     if(action==='add'||action==='quick-expense'||action==='quick-income'||action==='quick-transfer')transactionForm(null,action==='quick-income'?'income':action==='quick-transfer'?'transfer':'expense');
     else if(action==='edit-tx')transactionForm(state.transactions.find(t=>t.id===id));
@@ -1074,7 +1090,13 @@ $('#app').addEventListener('click',async e=>{
     else if(action==='open-update')openUpdateModal();
     else if(action==='remind-update'){if(updateInfo)localStorage.setItem('moneylog-update-dismiss-'+updateInfo.version,String(Date.now()));closeModal();showToast('Okay. I’ll remind you later.');}
     else if(action==='apply-update'){closeModal();await applyUpdate();}
-    else if(action==='check-update'){await checkForUpdate(true);showToast(updateInfo?`Version ${updateInfo.version} is available.`:'You are up to date.');renderApp();}
+    else if(action==='check-update'){
+      const result=await checkForUpdate(true);
+      if(result.status==='available') showToast(`Version ${result.version} is available.`);
+      else if(result.status==='current') showToast('You are up to date.');
+      else if(result.status==='error') showToast('Could not check for updates. Check your connection and try again.');
+      renderApp();
+    }
     else if(action==='setup-data-shield')await enableProtectedBackup();
     else if(action==='restore-protected')await pickProtectedRestore();
     else if(action==='connect-protected')await connectProtectedFile();
@@ -1154,6 +1176,28 @@ $('#modal-root').addEventListener('click',async e=>{
   }catch(err){console.error(err);showToast('Something went wrong.');}
 });
 matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change',()=>{if(state&&state.settings.theme==='system')applyTheme();});
+function syncViewportMetrics(){
+  const vv=window.visualViewport;
+  const height=vv?.height||window.innerHeight;
+  document.documentElement.style.setProperty('--moneylog-vh',`${Math.max(320,Math.round(height))}px`);
+  document.documentElement.style.setProperty('--moneylog-vv-top',`${Math.max(0,Math.round(vv?.offsetTop||0))}px`);
+}
+function keepAuthFieldVisible(el){
+  if(!el?.closest('.auth'))return;
+  window.setTimeout(()=>{
+    const vv=window.visualViewport;
+    const visibleHeight=vv?.height||window.innerHeight;
+    const rect=el.getBoundingClientRect();
+    const margin=18;
+    if(rect.bottom>visibleHeight-margin||rect.top<margin){
+      try{el.scrollIntoView({block:'center',inline:'nearest',behavior:'smooth'});}catch{el.scrollIntoView({block:'center'});}
+    }
+  },90);
+}
+syncViewportMetrics();
+window.visualViewport?.addEventListener('resize',syncViewportMetrics,{passive:true});
+window.visualViewport?.addEventListener('scroll',syncViewportMetrics,{passive:true});
+document.addEventListener('focusin',e=>keepAuthFieldVisible(e.target));
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&$('#modal-root').dataset.open)closeModal();});
 
 document.addEventListener('pointerdown',()=>{if(state)resetAutoLockTimer();},{passive:true});
