@@ -1,5 +1,5 @@
 /* MONEYLOG PWA - local-first encrypted personal finance journal */
-const APP_VERSION = '2.5.3';
+const APP_VERSION = '2.5.4';
 const UPDATE_MANIFEST_URL = './version.json';
 const DB_NAME = 'moneylog-secure-v2';
 const DB_VERSION = 1;
@@ -40,11 +40,9 @@ const SESSION_SEEN_NAME = 'moneylog-session-seen';
 
 const $ = (sel, root=document) => root.querySelector(sel);
 const $$ = (sel, root=document) => [...root.querySelectorAll(sel)];
-const todayISO = () => {
-  const d = new Date();
-  const off = d.getTimezoneOffset();
-  return new Date(d.getTime() - off*60000).toISOString().slice(0,10);
-};
+const pad2 = n => String(n).padStart(2,'0');
+const localDateKey = d => `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`;
+const todayISO = () => localDateKey(new Date());
 const monthKey = d => d.slice(0,7);
 const uuid = () => crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 const clamp = (n,min,max) => Math.min(max,Math.max(min,n));
@@ -83,7 +81,7 @@ function fmtDate(date){
 function fmtCompactDate(date){
   if(date===todayISO()) return 'Today';
   const yesterday = new Date(`${todayISO()}T00:00:00`); yesterday.setDate(yesterday.getDate()-1);
-  if(date===yesterday.toISOString().slice(0,10)) return 'Yesterday';
+  if(date===localDateKey(yesterday)) return 'Yesterday';
   return new Date(`${date}T00:00:00`).toLocaleDateString('en-BD',{month:'short',day:'numeric'});
 }
 function monthLabel(key){
@@ -97,7 +95,7 @@ function dateRange(kind){
   else if(kind==='3Months'){ from = new Date(today.getFullYear(), today.getMonth()-2, 1); }
   else if(kind==='year'){ from = new Date(today.getFullYear(),0,1); }
   else if(kind==='week'){ const day=today.getDay()||7; from.setDate(today.getDate()-day+1); }
-  return {from:from.toISOString().slice(0,10),to:to.toISOString().slice(0,10)};
+  return {from:localDateKey(from),to:localDateKey(to)};
 }
 
 function openDB(){
@@ -227,6 +225,7 @@ async function saveVault(){
     else await idbDelete('vault','previous').catch(()=>{});
     await idbPut('vault',{key:'main',...payload,updatedAt:new Date().toISOString()});
     state=nextState;
+    invalidateFinancialSnapshot();
     await idbPut('meta',{key:'vaultHealth',lastSavedAt:new Date().toISOString(),snapshot:true});
     await syncPublicPrefs();
     queueProtectedBackup();
@@ -245,39 +244,46 @@ function defaultState(){
     settings:{currency:'BDT',theme:'light',hideAmounts:false,defaultAccountId:null,lastExpenseCategoryId:'',lastIncomeCategoryId:'',reminderEnabled:false,reminderTime:'20:30',autoLock:'15',lastReminderDate:'',lastBackupAt:'',firstDayTip:true,installChoice:'',durableBackupName:'moneylog-vault.moneylog'}
   };
 }
-function normalizeAccounts(accounts,transactions,settings){
-  const list=Array.isArray(accounts)?accounts.map(a=>({...a,id:a.id||uuid(),name:String(a.name||'').trim()||'Account',type:String(a.type||'Account'),openingMinor:Number(a.openingMinor||0)})):[];
-  const canonicalByKey=new Map(), removedMap=new Map(), filtered=[];
-  for(const account of list){
-    const key=`${account.name.toLowerCase()}|${String(account.type).toLowerCase()}`;
-    const existing=canonicalByKey.get(key);
-    if(existing && account.name.toLowerCase()==='cash'){
-      // Keep one canonical Cash account and merge any accidental duplicate references into it.
-      existing.openingMinor += Number(account.openingMinor||0);
-      removedMap.set(account.id,existing.id);
-    }else{
-      canonicalByKey.set(key,account);
-      filtered.push(account);
-    }
-  }
-  const remap=id=>removedMap.get(id)||id;
-  for(const t of transactions||[]){t.accountId=remap(t.accountId);t.toAccountId=remap(t.toAccountId);}
-  if(settings?.defaultAccountId)settings.defaultAccountId=remap(settings.defaultAccountId);
-  return filtered.length?filtered:[{id:uuid(),name:'Cash',type:'Cash',openingMinor:0,description:'',archived:false}];
+function normalizeMinor(value,allowNegative=false){
+  const n=Number(value);
+  if(!Number.isFinite(n))return 0;
+  const minor=Math.trunc(n);
+  if(!Number.isSafeInteger(minor))return 0;
+  return allowNegative?minor:Math.abs(minor);
 }
-
+function normalizeAccounts(accounts){
+  const list=Array.isArray(accounts)?accounts.map(a=>({...a,id:String(a.id||uuid()),name:String(a.name||'').trim()||'Account',type:String(a.type||'Account'),openingMinor:normalizeMinor(a.openingMinor,true)})):[];
+  return list.length?list:[{id:uuid(),name:'Cash',type:'Cash',openingMinor:0,description:'',archived:false}];
+}
+function normalizeTransactions(transactions,accounts,settings){
+  const accountIds=new Set(accounts.map(a=>a.id));
+  const fallback=settings.defaultAccountId&&accountIds.has(settings.defaultAccountId)?settings.defaultAccountId:accounts.find(a=>!a.archived)?.id||accounts[0]?.id||'';
+  const seen=new Set();
+  return (Array.isArray(transactions)?transactions:[]).map(t=>{
+    const type=['expense','income','transfer'].includes(t?.type)?t.type:'expense';
+    const rawId=String(t?.id||uuid());
+    const id=seen.has(rawId)?uuid():rawId;
+    seen.add(id);
+    const accountId=accountIds.has(t?.accountId)?t.accountId:fallback;
+    let toAccountId=accountIds.has(t?.toAccountId)?t.toAccountId:'';
+    if(type==='transfer' && (!toAccountId||toAccountId===accountId))toAccountId=accounts.find(a=>!a.archived&&a.id!==accountId)?.id||'';
+    return {...t,id,type,amountMinor:normalizeMinor(t?.amountMinor,false),accountId,toAccountId};
+  });
+}
 function validateState(s){
   const d=defaultState();
   s=s&&typeof s==='object'?s:{};
-  const transactions=Array.isArray(s.transactions)?s.transactions.map(t=>({...t,id:t.id||uuid(),amountMinor:Number(t.amountMinor||0)})):[];
   const settings={...d.settings,...(s.settings||{})};
-  const accounts=normalizeAccounts(s.accounts,transactions,settings);
+  const accounts=normalizeAccounts(s.accounts);
+  settings.defaultAccountId=accounts.some(a=>a.id===settings.defaultAccountId)?settings.defaultAccountId:accounts.find(a=>!a.archived)?.id||accounts[0]?.id||null;
+  const transactions=normalizeTransactions(s.transactions,accounts,settings);
+  invalidateFinancialSnapshot();
   return {
     version:2,
     accounts,
     transactions,
     categories:{expense:Array.isArray(s.categories?.expense)?s.categories.expense:d.categories.expense,income:Array.isArray(s.categories?.income)?s.categories.income:d.categories.income},
-    budgets:{overallMinor:Number(s.budgets?.overallMinor||0),category:s.budgets?.category||{}},
+    budgets:{overallMinor:normalizeMinor(s.budgets?.overallMinor,false),category:s.budgets?.category||{}},
     goals:Array.isArray(s.goals)?s.goals:[],
     recurring:Array.isArray(s.recurring)?s.recurring:[],
     settings
@@ -604,24 +610,47 @@ function renderAuth(mode){
   }
 }
 
-function currentMonthTransactions(){return state.transactions.filter(t=>t.date.startsWith(monthKey(todayISO())));}
-function balanceForAccount(accountId){
-  const a=state.accounts.find(x=>x.id===accountId); if(!a)return 0;
-  return a.openingMinor + state.transactions.reduce((sum,t)=>{
-    if(t.type==='income' && t.accountId===accountId)return sum+t.amountMinor;
-    if(t.type==='expense' && t.accountId===accountId)return sum-t.amountMinor;
-    if(t.type==='transfer'){ if(t.accountId===accountId)sum-=t.amountMinor; if(t.toAccountId===accountId)sum+=t.amountMinor; }
-    return sum;
-  },0);
+let financialSnapshotCache=null;
+function calculateFinancialSnapshot(){
+  const balances=new Map(state.accounts.map(a=>[a.id,normalizeMinor(a.openingMinor,true)]));
+  const accountIds=new Set(state.accounts.map(a=>a.id));
+  let income=0,expense=0;
+  for(const t of state.transactions){
+    const amount=normalizeMinor(t.amountMinor,false);
+    if(!amount||!accountIds.has(t.accountId))continue;
+    if(t.type==='income'){
+      income+=amount;
+      balances.set(t.accountId,(balances.get(t.accountId)||0)+amount);
+    }else if(t.type==='expense'){
+      expense+=amount;
+      balances.set(t.accountId,(balances.get(t.accountId)||0)-amount);
+    }else if(t.type==='transfer'){
+      if(!t.toAccountId||t.toAccountId===t.accountId||!accountIds.has(t.toAccountId))continue;
+      balances.set(t.accountId,(balances.get(t.accountId)||0)-amount);
+      balances.set(t.toAccountId,(balances.get(t.toAccountId)||0)+amount);
+    }
+  }
+  return {balances,income,expense};
 }
-function totalBalance(){return state.accounts.reduce((sum,a)=>sum+(a.archived?0:balanceForAccount(a.id)),0);}
-function periodTotals(from,to){return state.transactions.filter(t=>t.date>=from&&t.date<=to).reduce((r,t)=>{if(t.type==='income')r.income+=t.amountMinor;if(t.type==='expense')r.expense+=t.amountMinor;return r},{income:0,expense:0});}
+function financialSnapshot(){if(!financialSnapshotCache)financialSnapshotCache=calculateFinancialSnapshot();return financialSnapshotCache;}
+function invalidateFinancialSnapshot(){financialSnapshotCache=null;}
+function currentMonthTransactions(){return state.transactions.filter(t=>t.date.startsWith(monthKey(todayISO())));}
+function balanceForAccount(accountId){return financialSnapshot().balances.get(accountId)||0;}
+function totalBalance(){return state.accounts.reduce((sum,a)=>sum+balanceForAccount(a.id),0);}
+function periodTotals(from,to){
+  return state.transactions.filter(t=>t.date>=from&&t.date<=to&&['income','expense'].includes(t.type)).reduce((r,t)=>{
+    const amount=normalizeMinor(t.amountMinor,false);
+    if(!amount||!state.accounts.some(a=>a.id===t.accountId))return r;
+    if(t.type==='income')r.income+=amount; else r.expense+=amount;
+    return r;
+  },{income:0,expense:0});
+}
 function getCurrentTotals(){const r=dateRange('thisMonth');return periodTotals(r.from,r.to);}
 function categoryName(type,id){return state.categories[type]?.find(c=>c.id===id)?.name||id||'Other';}
 function accountName(id){return state.accounts.find(a=>a.id===id)?.name||'Unknown account';}
 function categoryIdFromName(type,name){return state.categories[type]?.find(c=>c.name===name)?.id || '';}
-function accountOptions(selected,includeArchived=false){return state.accounts.filter(a=>includeArchived||!a.archived).map(a=>`<option value="${esc(a.id)}" ${a.id===selected?'selected':''}>${esc(a.name)}</option>`).join('');}
-function categoryOptions(type,selected){return state.categories[type].filter(c=>!c.archived).map(c=>`<option value="${esc(c.id)}" ${c.id===selected?'selected':''}>${esc(c.name)}</option>`).join('');}
+function accountOptions(selected,includeArchived=false){return state.accounts.filter(a=>includeArchived||!a.archived).map(a=>`<option value="${esc(a.id)}" ${a.id===selected?'selected':''}>${esc(a.name)}${a.archived?' (Archived)':''}</option>`).join('');}
+function categoryOptions(type,selected,includeSelectedArchived=false){return state.categories[type].filter(c=>!c.archived||includeSelectedArchived&&c.id===selected).map(c=>`<option value="${esc(c.id)}" ${c.id===selected?'selected':''}>${esc(c.name)}${c.archived?' (Archived)':''}</option>`).join('');}
 function recentTransactions(n=6){return state.transactions.slice().sort((a,b)=>b.date.localeCompare(a.date)||(b.time||'').localeCompare(a.time||'')||String(b.id).localeCompare(String(a.id))).slice(0,n);}
 function transactionRow(t,compact=false){
   const label=t.type==='transfer'?`${accountName(t.accountId)} → ${accountName(t.toAccountId)}`:categoryName(t.type,t.categoryId);
@@ -639,7 +668,7 @@ function homeView(){
   const hide=state.settings.hideAmounts;
   const accDefault=state.settings.defaultAccountId||activeAccounts[0]?.id;
   return `<div class="topbar home-topbar"><div><div class="kicker">${greeting()}</div><h1 class="page-title">Your money, clearly.</h1></div><div class="top-actions"><button class="btn btn-soft optional" data-action="quick-income">${ICONS.income} Income</button><button class="btn btn-ghost btn-icon top-lock" data-action="lock" aria-label="Lock MONEYLOG" title="Lock MONEYLOG"><span class="top-lock-circle">${ICONS.lock}</span></button></div></div>
-  <section class="hero"><div class="hero-row"><div><div class="kicker label">TOTAL AVAILABLE</div><div class="hero-amount">${hide?'••••••••':esc(formatMoney(totalBalance()))}</div><small class="label">Across ${activeAccounts.length} active account${activeAccounts.length===1?'':'s'}</small><div class="hero-date">Today · ${esc(fmtDate(todayISO()))}</div></div><button class="btn btn-soft" data-action="toggle-hide">${ICONS.eye} ${hide?'Show':'Hide'}</button></div></section>
+  <section class="hero"><div class="hero-row"><div><div class="kicker label">TOTAL AVAILABLE</div><div class="hero-amount">${hide?'••••••••':esc(formatMoney(totalBalance()))}</div><small class="label">Across ${state.accounts.length} account${state.accounts.length===1?'':'s'}</small><div class="hero-date">Today · ${esc(fmtDate(todayISO()))}</div></div><button class="btn btn-soft" data-action="toggle-hide">${ICONS.eye} ${hide?'Show':'Hide'}</button></div></section>
   <div class="grid grid-4 section"><div class="card stat"><div class="label">THIS MONTH · IN</div><strong class="income">${hide?'••••':esc(formatMoney(totals.income,true))}</strong></div><div class="card stat"><div class="label">THIS MONTH · OUT</div><strong class="expense">${hide?'••••':esc(formatMoney(totals.expense,true))}</strong></div><div class="card stat"><div class="label">NET FLOW</div><strong class="${totals.income-totals.expense>=0?'income':'expense'}">${hide?'••••':esc(formatMoney(totals.income-totals.expense,true))}</strong></div><div class="card stat"><div class="label">BUDGET LEFT</div><strong>${hide?'••••':remaining===null?'-':esc(formatMoney(remaining,true))}</strong></div></div>
   <div class="section"><div class="section-head"><h2>Quick add</h2><span class="mini">Few taps. Done.</span></div><div class="quick-grid"><button class="quick" data-action="quick-expense"><span class="qicon expense">${ICONS.expense}</span><span><strong>Expense</strong><small>Food, transport, bills…</small></span></button><button class="quick" data-action="quick-income"><span class="qicon income">${ICONS.income}</span><span><strong>Income</strong><small>Salary, freelance…</small></span></button><button class="quick" data-action="quick-transfer"><span class="qicon">${ICONS.transfer}</span><span><strong>Transfer</strong><small>Move between accounts</small></span></button></div></div>
   <div class="section"><div class="section-head"><h2>Recent activity</h2><button class="btn btn-ghost" data-tab="history">See all ${ICONS.arrow}</button></div><div class="card">${latest.length?`<div class="list">${latest.map(transactionRow).join('')}</div>`:`<div class="empty"><strong>Your journal starts here.</strong>Add your first expense or income and MONEYLOG will handle the math.</div>`}</div></div>
@@ -670,7 +699,7 @@ function insightsView(){
   const totals=periodTotals(range.from,range.to);
   const expenseByCat={};state.transactions.filter(t=>t.type==='expense'&&t.date>=range.from&&t.date<=range.to).forEach(t=>{const n=categoryName('expense',t.categoryId);expenseByCat[n]=(expenseByCat[n]||0)+t.amountMinor;});
   const ranked=Object.entries(expenseByCat).sort((a,b)=>b[1]-a[1]).slice(0,8);const max=ranked[0]?.[1]||1;
-  const months=[];const now=new Date(`${todayISO()}T00:00:00`);for(let i=5;i>=0;i--){const d=new Date(now.getFullYear(),now.getMonth()-i,1);const key=d.toISOString().slice(0,7);months.push({key,label:d.toLocaleDateString('en-BD',{month:'short'}),...periodTotals(`${key}-01`,`${key}-${new Date(d.getFullYear(),d.getMonth()+1,0).getDate()}`)});}
+  const months=[];const now=new Date(`${todayISO()}T00:00:00`);for(let i=5;i>=0;i--){const d=new Date(now.getFullYear(),now.getMonth()-i,1);const key=localDateKey(d).slice(0,7);months.push({key,label:d.toLocaleDateString('en-BD',{month:'short'}),...periodTotals(`${key}-01`,`${key}-${new Date(d.getFullYear(),d.getMonth()+1,0).getDate()}`)});}
   const trendMax=Math.max(1,...months.map(m=>Math.max(m.income,m.expense)));
   return `<div class="topbar"><div><div class="kicker">UNDERSTAND YOUR MONEY</div><h1 class="page-title">Insights</h1></div><div class="top-actions"><select class="select" id="insight-range" style="width:auto"><option value="week">This week</option><option value="thisMonth" selected>This month</option><option value="lastMonth">Last month</option><option value="3Months">Last 3 months</option><option value="year">This year</option></select><button class="btn btn-ghost btn-icon top-lock" data-action="lock" aria-label="Lock MONEYLOG" title="Lock MONEYLOG"><span class="top-lock-circle">${ICONS.lock}</span></button></div></div>
   <div class="grid grid-3"><div class="card stat"><div class="label">INCOME</div><strong class="income">${esc(formatMoney(totals.income))}</strong><small class="muted">${esc(fmtDate(range.from))} → ${esc(fmtDate(range.to))}</small></div><div class="card stat"><div class="label">EXPENSE</div><strong class="expense">${esc(formatMoney(totals.expense))}</strong><small class="muted">Transfers excluded</small></div><div class="card stat"><div class="label">NET FLOW</div><strong class="${totals.income-totals.expense>=0?'income':'expense'}">${esc(formatMoney(totals.income-totals.expense))}</strong><small class="muted">Income minus expenses</small></div></div>
@@ -764,8 +793,8 @@ function transactionForm(existing=null,forcedType='expense'){
     <form id="tx-form">
       <div class="choice-row" id="tx-type">${['expense','income','transfer'].map(t=>`<button type="button" class="choice ${type===t?'active':''}" data-tx-type="${t}">${t==='expense'?ICONS.expense:t==='income'?ICONS.income:ICONS.transfer} ${t[0].toUpperCase()+t.slice(1)}</button>`).join('')}</div>
       <div class="field" style="margin-top:16px"><label>Amount</label><input id="tx-amount" class="input" inputmode="decimal" type="number" min="0.01" step="0.01" required placeholder="0.00" value="${existing?esc((existing.amountMinor/100).toFixed(2)):''}" style="font-size:28px;font-weight:850;padding:16px"></div>
-      <div class="form-grid two" style="margin-top:12px"><div class="field" id="tx-category-field"><label>Category</label><select id="tx-category" class="select">${type==='transfer'?'<option value="">Transfer</option>':categoryOptions(type,cat)}</select></div><div class="field"><label>${type==='transfer'?'From account':'Account'}</label><select id="tx-account" class="select">${accountOptions(defaultAcc)}</select></div></div>
-      <div class="field ${type==='transfer'?'':'hidden'}" id="tx-to-field"><label>To account</label><select id="tx-to" class="select">${accountOptions(existing?.toAccountId||state.accounts.find(a=>a.id!==defaultAcc&&!a.archived)?.id||'')}</select></div>
+      <div class="form-grid two" style="margin-top:12px"><div class="field" id="tx-category-field"><label>Category</label><select id="tx-category" class="select">${type==='transfer'?'<option value="">Transfer</option>':categoryOptions(type,cat,Boolean(existing))}</select></div><div class="field"><label>${type==='transfer'?'From account':'Account'}</label><select id="tx-account" class="select">${accountOptions(defaultAcc,Boolean(existing))}</select></div></div>
+      <div class="field ${type==='transfer'?'':'hidden'}" id="tx-to-field"><label>To account</label><select id="tx-to" class="select">${accountOptions(existing?.toAccountId||state.accounts.find(a=>a.id!==defaultAcc&&!a.archived)?.id||'',Boolean(existing))}</select></div>
       <div class="form-grid two" style="margin-top:12px"><div class="field"><label>Date</label><input id="tx-date" class="input" type="date" value="${existing?.date||todayISO()}" required></div><div class="field"><label>Time <span class="mini">optional</span></label><input id="tx-time" class="input" type="time" value="${existing?.time||''}"></div></div>
       <div class="field" style="margin-top:12px"><label>Note <span class="mini">optional</span></label><input id="tx-note" class="input" maxlength="120" value="${esc(existing?.note||'')}" placeholder="What was this for?"></div>
       <div class="modal-actions"><button type="button" class="btn btn-ghost" data-action="close-modal">Cancel</button>${existing?'<button type="button" class="btn btn-danger" data-action="delete-tx">Delete</button>':''}<button class="btn btn-primary">${existing?'Save changes':'Save transaction'}</button></div>
@@ -797,7 +826,25 @@ async function saveTransaction(existing,type){
 
 function accountForm(existing=null){
   modal(existing?'Edit account':'New account',`<form id="account-form"><div class="form-grid two"><div class="field"><label>Name</label><input id="account-name" class="input" required maxlength="40" value="${esc(existing?.name||'')}" placeholder="Cash, Bank, Savings…"></div><div class="field"><label>Type</label><select id="account-type" class="select">${['Cash','Bank','Mobile money','Savings','Other'].map(x=>`<option ${existing?.type===x?'selected':''}>${esc(x)}</option>`).join('')}</select></div></div><div class="field" style="margin-top:12px"><label>Opening balance</label><input id="account-opening" class="input" type="number" step="0.01" value="${existing?existing.openingMinor/100:0}"></div><div class="field" style="margin-top:12px"><label>Description <span class="mini">optional</span></label><input id="account-desc" class="input" maxlength="80" value="${esc(existing?.description||'')}"></div><div class="setting" style="margin-top:5px"><div><div class="setting-title">Archived</div><div class="setting-desc">Keeps historical records but removes the account from quick entry.</div></div><label class="switch"><input id="account-archived" type="checkbox" ${existing?.archived?'checked':''}><span class="slider"></span></label></div><div class="modal-actions"><button type="button" class="btn btn-ghost" data-action="close-modal">Cancel</button><button class="btn btn-primary">Save account</button></div></form>`);
-  $('#account-form').addEventListener('submit',async e=>{e.preventDefault();if(demoMode){closeModal();openDemoSignup();return;}const name=$('#account-name').value.trim();const opening=Number($('#account-opening').value);if(!name||!Number.isFinite(opening))return showToast('Enter a valid account.');if(existing){Object.assign(existing,{name,type:$('#account-type').value,openingMinor:Math.round(opening*100),description:$('#account-desc').value.trim(),archived:$('#account-archived').checked});}else state.accounts.push({id:uuid(),name,type:$('#account-type').value,openingMinor:Math.round(opening*100),description:$('#account-desc').value.trim(),archived:false});if(!state.settings.defaultAccountId)state.settings.defaultAccountId=state.accounts.find(a=>!a.archived)?.id||null;await saveVault();closeModal();renderApp();showToast('Account saved.');});
+  $('#account-form').addEventListener('submit',async e=>{
+    e.preventDefault();
+    if(demoMode){closeModal();openDemoSignup();return;}
+    const name=$('#account-name').value.trim();
+    const opening=Number($('#account-opening').value);
+    const type=$('#account-type').value;
+    const openingMinor=opening===0?0:Math.round(opening*100);
+    if(!name||!Number.isFinite(opening)||!Number.isSafeInteger(openingMinor))return showToast('Enter a valid account balance.');
+    const wantsArchived=$('#account-archived').checked;
+    if(existing&&!existing.archived&&wantsArchived){
+      const projectedBalance=balanceForAccount(existing.id)-existing.openingMinor+openingMinor;
+      if(projectedBalance!==0)return showToast('Bring this account balance to ৳0 before archiving it.');
+    }
+    if(existing)Object.assign(existing,{name,type,openingMinor,description:$('#account-desc').value.trim(),archived:wantsArchived});
+    else state.accounts.push({id:uuid(),name,type,openingMinor,description:$('#account-desc').value.trim(),archived:false});
+    if(!state.settings.defaultAccountId||!state.accounts.some(a=>a.id===state.settings.defaultAccountId&&!a.archived))state.settings.defaultAccountId=state.accounts.find(a=>!a.archived)?.id||null;
+    invalidateFinancialSnapshot();
+    await saveVault();closeModal();renderApp();showToast('Account saved.');
+  });
 }
 
 function categoryForm(existing=null,type='expense'){
@@ -815,18 +862,31 @@ function goalForm(existing=null){
 
 function recurringForm(existing=null){
   const t=existing?.type||'expense';const acc=existing?.accountId||state.settings.defaultAccountId||state.accounts.find(a=>!a.archived)?.id||'';
-  modal(existing?'Edit recurring entry':'New recurring entry',`<form id="recurring-form"><div class="field"><label>Name</label><input id="rec-name" class="input" required value="${esc(existing?.name||'')}" placeholder="Salary, rent, internet…"></div><div class="choice-row" style="margin-top:12px">${['expense','income'].map(x=>`<button type="button" class="choice ${t===x?'active':''}" data-rec-type="${x}">${x[0].toUpperCase()+x.slice(1)}</button>`).join('')}</div><div class="form-grid two" style="margin-top:12px"><div class="field"><label>Amount</label><input id="rec-amount" class="input" type="number" min="0.01" step="0.01" required value="${existing?existing.amountMinor/100:''}"></div><div class="field"><label>Category</label><select id="rec-cat" class="select">${categoryOptions(t,existing?.categoryId)}</select></div></div><div class="form-grid two" style="margin-top:12px"><div class="field"><label>Account</label><select id="rec-account" class="select">${accountOptions(acc)}</select></div><div class="field"><label>Frequency</label><select id="rec-frequency" class="select">${['daily','weekly','monthly','yearly'].map(x=>`<option ${existing?.frequency===x?'selected':''}>${x}</option>`).join('')}</select></div></div><div class="form-grid two" style="margin-top:12px"><div class="field"><label>Next date</label><input id="rec-next" class="input" type="date" required value="${existing?.nextDate||todayISO()}"></div><div class="field"><label>Active</label><label class="switch" style="margin-top:7px"><input id="rec-active" type="checkbox" ${existing?.active!==false?'checked':''}><span class="slider"></span></label></div></div><div class="field" style="margin-top:12px"><label>Note <span class="mini">optional</span></label><input id="rec-note" class="input" value="${esc(existing?.note||'')}"></div><div class="install-hint" style="margin-top:12px">Recurring entries are created when MONEYLOG opens. Duplicate entries are prevented by storing each generated date.</div><div class="modal-actions"><button type="button" class="btn btn-ghost" data-action="close-modal">Cancel</button>${existing?'<button type="button" class="btn btn-danger" data-action="delete-recurring">Delete</button>':''}<button class="btn btn-primary">Save recurring entry</button></div></form>`);
+  modal(existing?'Edit recurring entry':'New recurring entry',`<form id="recurring-form"><div class="field"><label>Name</label><input id="rec-name" class="input" required value="${esc(existing?.name||'')}" placeholder="Salary, rent, internet…"></div><div class="choice-row" style="margin-top:12px">${['expense','income'].map(x=>`<button type="button" class="choice ${t===x?'active':''}" data-rec-type="${x}">${x[0].toUpperCase()+x.slice(1)}</button>`).join('')}</div><div class="form-grid two" style="margin-top:12px"><div class="field"><label>Amount</label><input id="rec-amount" class="input" type="number" min="0.01" step="0.01" required value="${existing?existing.amountMinor/100:''}"></div><div class="field"><label>Category</label><select id="rec-cat" class="select">${categoryOptions(t,existing?.categoryId,Boolean(existing))}</select></div></div><div class="form-grid two" style="margin-top:12px"><div class="field"><label>Account</label><select id="rec-account" class="select">${accountOptions(acc,Boolean(existing))}</select></div><div class="field"><label>Frequency</label><select id="rec-frequency" class="select">${['daily','weekly','monthly','yearly'].map(x=>`<option ${existing?.frequency===x?'selected':''}>${x}</option>`).join('')}</select></div></div><div class="form-grid two" style="margin-top:12px"><div class="field"><label>Next date</label><input id="rec-next" class="input" type="date" required value="${existing?.nextDate||todayISO()}"></div><div class="field"><label>Active</label><label class="switch" style="margin-top:7px"><input id="rec-active" type="checkbox" ${existing?.active!==false?'checked':''}><span class="slider"></span></label></div></div><div class="field" style="margin-top:12px"><label>Note <span class="mini">optional</span></label><input id="rec-note" class="input" value="${esc(existing?.note||'')}"></div><div class="install-hint" style="margin-top:12px">Recurring entries are created when MONEYLOG opens. Duplicate entries are prevented by storing each generated date.</div><div class="modal-actions"><button type="button" class="btn btn-ghost" data-action="close-modal">Cancel</button>${existing?'<button type="button" class="btn btn-danger" data-action="delete-recurring">Delete</button>':''}<button class="btn btn-primary">Save recurring entry</button></div></form>`);
   let recType=t;$$('[data-rec-type]').forEach(b=>b.onclick=()=>{recType=b.dataset.recType;$$('[data-rec-type]').forEach(x=>x.classList.toggle('active',x===b));$('#rec-cat').innerHTML=categoryOptions(recType,'');});
   $('#recurring-form').addEventListener('submit',async e=>{e.preventDefault();if(demoMode){closeModal();openDemoSignup();return;}const amount=amountMajorToMinor($('#rec-amount').value);if(!amount)return showToast('Enter a valid amount.');const obj={id:existing?.id||uuid(),name:$('#rec-name').value.trim(),type:recType,amountMinor:amount,categoryId:$('#rec-cat').value,accountId:$('#rec-account').value,frequency:$('#rec-frequency').value,nextDate:$('#rec-next').value,active:$('#rec-active').checked,note:$('#rec-note').value.trim(),generatedDates:existing?.generatedDates||[]};if(existing)Object.assign(existing,obj);else state.recurring.push(obj);await processRecurring();await saveVault();closeModal();renderApp();showToast('Recurring entry saved.');});
   if(existing)$('#modal-root').dataset.editingId=existing.id;
 }
-function addDays(date,frequency){const d=new Date(`${date}T00:00:00`);if(frequency==='daily')d.setDate(d.getDate()+1);if(frequency==='weekly')d.setDate(d.getDate()+7);if(frequency==='monthly')d.setMonth(d.getMonth()+1);if(frequency==='yearly')d.setFullYear(d.getFullYear()+1);return d.toISOString().slice(0,10);}
+function addDays(date,frequency){const d=new Date(`${date}T00:00:00`);if(frequency==='daily')d.setDate(d.getDate()+1);if(frequency==='weekly')d.setDate(d.getDate()+7);if(frequency==='monthly')d.setMonth(d.getMonth()+1);if(frequency==='yearly')d.setFullYear(d.getFullYear()+1);return localDateKey(d);}
 async function processRecurring(){
-  if(!state)return;let changed=false;const today=todayISO();
-  for(const r of state.recurring){if(!r.active||!r.nextDate)continue;r.generatedDates=r.generatedDates||[];while(r.nextDate<=today){if(!r.generatedDates.includes(r.nextDate)){state.transactions.push({id:uuid(),type:r.type,amountMinor:r.amountMinor,categoryId:r.categoryId,accountId:r.accountId,toAccountId:'',date:r.nextDate,time:'',note:r.note||r.name,updatedAt:new Date().toISOString(),recurringId:r.id});r.generatedDates.push(r.nextDate);changed=true;}r.nextDate=addDays(r.nextDate,r.frequency);changed=true;}}
-  if(changed)await saveVault();
+  if(!state)return;
+  let changed=false;const today=todayISO();
+  const accountIds=new Set(state.accounts.map(a=>a.id));
+  const fallback=state.settings.defaultAccountId||state.accounts.find(a=>!a.archived)?.id||state.accounts[0]?.id||'';
+  for(const r of state.recurring){
+    if(!r.active||!r.nextDate)continue;
+    r.generatedDates=r.generatedDates||[];
+    if(!accountIds.has(r.accountId)){r.accountId=fallback;changed=true;}
+    while(r.nextDate<=today){
+      if(!r.generatedDates.includes(r.nextDate)){
+        state.transactions.push({id:uuid(),type:r.type,amountMinor:normalizeMinor(r.amountMinor,false),categoryId:r.categoryId,accountId:r.accountId,toAccountId:'',date:r.nextDate,time:'',note:r.note||r.name,updatedAt:new Date().toISOString(),recurringId:r.id});
+        r.generatedDates.push(r.nextDate);changed=true;
+      }
+      r.nextDate=addDays(r.nextDate,r.frequency);changed=true;
+    }
+  }
+  if(changed){invalidateFinancialSnapshot();await saveVault();}
 }
-
 async function changePassword(){
   if(demoMode){openDemoSignup();return;}
   modal('Change MONEYLOG password',`<form id="pw-form"><div class="field"><label>Current password</label><input id="pw-old" class="input" type="password" required autocomplete="current-password"></div><div class="field" style="margin-top:12px"><label>New password</label><input id="pw-new" class="input" type="password" minlength="8" required autocomplete="new-password"></div><div class="field" style="margin-top:12px"><label>Confirm new password</label><input id="pw-confirm" class="input" type="password" minlength="8" required autocomplete="new-password"></div><div class="field" style="margin-top:12px"><label>Recovery code</label><input id="pw-recovery" class="input" required placeholder="Required to keep password recovery working"></div><div class="install-hint" style="margin-top:12px">Your recovery code is used to wrap the new password key. It is not stored in plain text.</div><div class="modal-actions"><button type="button" class="btn btn-ghost" data-action="close-modal">Cancel</button><button class="btn btn-primary">Change password</button></div></form>`);
@@ -1187,7 +1247,7 @@ function renderInsightsForRange(kind){
   requestAnimationFrame(()=>$('#insight-range')?.focus());
 }
 function insightsViewDynamic(kind){
-  const range=dateRange(kind),totals=periodTotals(range.from,range.to);const expenseByCat={};state.transactions.filter(t=>t.type==='expense'&&t.date>=range.from&&t.date<=range.to).forEach(t=>{const n=categoryName('expense',t.categoryId);expenseByCat[n]=(expenseByCat[n]||0)+t.amountMinor;});const ranked=Object.entries(expenseByCat).sort((a,b)=>b[1]-a[1]).slice(0,8),max=ranked[0]?.[1]||1;const months=[];const now=new Date(`${todayISO()}T00:00:00`);for(let i=5;i>=0;i--){const d=new Date(now.getFullYear(),now.getMonth()-i,1),key=d.toISOString().slice(0,7),last=new Date(d.getFullYear(),d.getMonth()+1,0).getDate();months.push({label:d.toLocaleDateString('en-BD',{month:'short'}),...periodTotals(`${key}-01`,`${key}-${last}`)});}const trendMax=Math.max(1,...months.map(m=>Math.max(m.income,m.expense)));return `<div class="topbar"><div><div class="kicker">UNDERSTAND YOUR MONEY</div><h1 class="page-title">Insights</h1></div><div class="top-actions"><select class="select" id="insight-range" style="width:auto">${['week','thisMonth','lastMonth','3Months','year'].map(x=>`<option value="${x}" ${x===kind?'selected':''}>${x==='week'?'This week':x==='thisMonth'?'This month':x==='lastMonth'?'Last month':x==='3Months'?'Last 3 months':'This year'}</option>`).join('')}</select><button class="btn btn-ghost btn-icon top-lock" data-action="lock" aria-label="Lock MONEYLOG" title="Lock MONEYLOG"><span class="top-lock-circle">${ICONS.lock}</span></button></div></div><div class="grid grid-3"><div class="card stat"><div class="label">INCOME</div><strong class="income">${esc(formatMoney(totals.income))}</strong><small class="muted">${esc(fmtDate(range.from))} → ${esc(fmtDate(range.to))}</small></div><div class="card stat"><div class="label">EXPENSE</div><strong class="expense">${esc(formatMoney(totals.expense))}</strong><small class="muted">Transfers excluded</small></div><div class="card stat"><div class="label">NET FLOW</div><strong class="${totals.income-totals.expense>=0?'income':'expense'}">${esc(formatMoney(totals.income-totals.expense))}</strong><small class="muted">Income minus expenses</small></div></div><div class="grid grid-2 section"><div class="card"><div class="section-head"><h2>Where it goes</h2><span class="mini">Selected period</span></div>${ranked.length?`<div class="chart">${ranked.map(([name,val])=>`<div class="bar-item"><span class="truncate">${esc(name)}</span><div class="bar-track"><span style="width:${val/max*100}%"></span></div><strong style="text-align:right">${esc(formatMoney(val,true))}</strong></div>`).join('')}</div>`:`<div class="empty"><strong>No expenses yet.</strong>No category spending for this period.</div>`}</div><div class="card"><div class="section-head"><h2>Six-month flow</h2><span class="mini">Context</span></div><div class="chart">${months.map(m=>`<div><div class="row" style="justify-content:space-between"><span class="mini">${esc(m.label)}</span><span class="mini">${esc(formatMoney(m.income,true))} in · ${esc(formatMoney(m.expense,true))} out</span></div><div class="progress" style="margin-top:5px"><span style="width:${m.income/trendMax*100}%;background:var(--income)"></span></div><div class="progress" style="margin-top:4px"><span style="width:${m.expense/trendMax*100}%;background:var(--expense)"></span></div></div>`).join('')}</div></div></div><div class="section"><div class="section-head"><h2>Account picture</h2></div><div class="accounts-grid">${state.accounts.map(a=>`<div class="account-card"><span class="pill">${esc(a.type)}</span><strong>${esc(a.name)}</strong>${a.archived?'<span class="account-type">Archived</span>':''}<div class="amount">${esc(formatMoney(balanceForAccount(a.id)))}</div><small class="muted">Opening ${esc(formatMoney(a.openingMinor))}</small></div>`).join('')}</div></div>`;}
+  const range=dateRange(kind),totals=periodTotals(range.from,range.to);const expenseByCat={};state.transactions.filter(t=>t.type==='expense'&&t.date>=range.from&&t.date<=range.to).forEach(t=>{const n=categoryName('expense',t.categoryId);expenseByCat[n]=(expenseByCat[n]||0)+t.amountMinor;});const ranked=Object.entries(expenseByCat).sort((a,b)=>b[1]-a[1]).slice(0,8),max=ranked[0]?.[1]||1;const months=[];const now=new Date(`${todayISO()}T00:00:00`);for(let i=5;i>=0;i--){const d=new Date(now.getFullYear(),now.getMonth()-i,1),key=localDateKey(d).slice(0,7),last=new Date(d.getFullYear(),d.getMonth()+1,0).getDate();months.push({label:d.toLocaleDateString('en-BD',{month:'short'}),...periodTotals(`${key}-01`,`${key}-${last}`)});}const trendMax=Math.max(1,...months.map(m=>Math.max(m.income,m.expense)));return `<div class="topbar"><div><div class="kicker">UNDERSTAND YOUR MONEY</div><h1 class="page-title">Insights</h1></div><div class="top-actions"><select class="select" id="insight-range" style="width:auto">${['week','thisMonth','lastMonth','3Months','year'].map(x=>`<option value="${x}" ${x===kind?'selected':''}>${x==='week'?'This week':x==='thisMonth'?'This month':x==='lastMonth'?'Last month':x==='3Months'?'Last 3 months':'This year'}</option>`).join('')}</select><button class="btn btn-ghost btn-icon top-lock" data-action="lock" aria-label="Lock MONEYLOG" title="Lock MONEYLOG"><span class="top-lock-circle">${ICONS.lock}</span></button></div></div><div class="grid grid-3"><div class="card stat"><div class="label">INCOME</div><strong class="income">${esc(formatMoney(totals.income))}</strong><small class="muted">${esc(fmtDate(range.from))} → ${esc(fmtDate(range.to))}</small></div><div class="card stat"><div class="label">EXPENSE</div><strong class="expense">${esc(formatMoney(totals.expense))}</strong><small class="muted">Transfers excluded</small></div><div class="card stat"><div class="label">NET FLOW</div><strong class="${totals.income-totals.expense>=0?'income':'expense'}">${esc(formatMoney(totals.income-totals.expense))}</strong><small class="muted">Income minus expenses</small></div></div><div class="grid grid-2 section"><div class="card"><div class="section-head"><h2>Where it goes</h2><span class="mini">Selected period</span></div>${ranked.length?`<div class="chart">${ranked.map(([name,val])=>`<div class="bar-item"><span class="truncate">${esc(name)}</span><div class="bar-track"><span style="width:${val/max*100}%"></span></div><strong style="text-align:right">${esc(formatMoney(val,true))}</strong></div>`).join('')}</div>`:`<div class="empty"><strong>No expenses yet.</strong>No category spending for this period.</div>`}</div><div class="card"><div class="section-head"><h2>Six-month flow</h2><span class="mini">Context</span></div><div class="chart">${months.map(m=>`<div><div class="row" style="justify-content:space-between"><span class="mini">${esc(m.label)}</span><span class="mini">${esc(formatMoney(m.income,true))} in · ${esc(formatMoney(m.expense,true))} out</span></div><div class="progress" style="margin-top:5px"><span style="width:${m.income/trendMax*100}%;background:var(--income)"></span></div><div class="progress" style="margin-top:4px"><span style="width:${m.expense/trendMax*100}%;background:var(--expense)"></span></div></div>`).join('')}</div></div></div><div class="section"><div class="section-head"><h2>Account picture</h2></div><div class="accounts-grid">${state.accounts.map(a=>`<div class="account-card"><span class="pill">${esc(a.type)}</span><strong>${esc(a.name)}</strong>${a.archived?'<span class="account-type">Archived</span>':''}<div class="amount">${esc(formatMoney(balanceForAccount(a.id)))}</div><small class="muted">Opening ${esc(formatMoney(a.openingMinor))}</small></div>`).join('')}</div></div>`;}
 
 window.addEventListener('beforeinstallprompt',e=>{
   if(isInstalledWebApp())return;
