@@ -1,5 +1,5 @@
 /* MONEYLOG PWA - local-first encrypted personal finance journal */
-const APP_VERSION = '2.5.4';
+const APP_VERSION = '2.6.0';
 const UPDATE_MANIFEST_URL = './version.json';
 const DB_NAME = 'moneylog-secure-v2';
 const DB_VERSION = 1;

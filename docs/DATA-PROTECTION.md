@@ -1,54 +1,44 @@
 # MONEYLOG Data Protection
 
-MONEYLOG uses local browser storage by design. That gives the app privacy and offline
-behavior, but it also means browser storage is part of the device's storage lifecycle.
+MONEYLOG keeps its financial vault in local browser storage and supports encrypted recovery files. This model avoids a required cloud account, but local storage remains governed by the browser, operating system, and device lifecycle.
 
-## The protection layers
+## Storage components
 
-### 1. Encrypted primary vault
+### Encrypted primary vault
 
-The current vault is encrypted before it is written to IndexedDB. The active session key
-exists only for the current unlocked session.
+The financial state is encrypted before being stored in IndexedDB. The current application derives encryption keys using PBKDF2 with SHA-256 and uses AES-GCM authenticated encryption through the Web Crypto API. The active session key is held for the unlocked application session and removed from application state when explicitly locked or when the configured lock behavior expires the session.
 
-### 2. Previous safe vault record
+### Previous safe copy
 
-Before the current encrypted vault is replaced, MONEYLOG keeps the previous encrypted
-record under a separate key. This is intended to provide a recovery point for a failed or
-corrupted latest write.
+Before a new readable vault replaces the primary record, MONEYLOG can preserve the previous encrypted vault record. This provides a local recovery point when the latest write is missing or cannot be decrypted. It is a recovery aid rather than a substitute for an independent backup.
 
-### 3. Persistent browser storage
+### Browser storage persistence
 
-MONEYLOG requests persistent storage where the browser exposes the StorageManager API.
-Persistent storage can reduce automatic eviction. It does not make browser data immune
-to explicit site-data deletion, browser reset, or profile removal.
+Where supported, the app requests persistent storage to reduce the chance of automatic storage eviction. This request may be declined, and it does not prevent explicit site-data deletion, browser profile removal, or device failure.
 
-### 4. External recovery file
+### External protected file
 
-The protected `.moneylog` file is the important recovery layer for browser cleanup. On
-supporting browsers, the File System Access API lets MONEYLOG remember the selected file
-and update it after successful vault saves.
+A password-protected `.moneylog` file can be saved outside browser storage. Supported browsers may allow MONEYLOG to keep a selected file handle and update the file after successful vault saves. Other browsers use the downloaded encrypted-backup workflow.
 
-The external file is encrypted with MONEYLOG's vault key and additionally stores a
-password-wrapped copy of that key so the file can be restored independently.
+The protected file contains encrypted data and key-recovery material protected by a password. It should be stored separately from the browser profile and handled as sensitive data.
 
-## What Data Shield does not claim
+## Recovery workflow
 
-Data Shield does not claim to make the browser database indestructible. A deliberate
-browser cleanup can still remove IndexedDB, local storage, service-worker caches, and
-other origin data.
+1. Open MONEYLOG and select the protected-file restore flow.
+2. Select the appropriate `.moneylog` file.
+3. Enter the password associated with that protected file.
+4. Allow MONEYLOG to verify and decrypt the contents.
+5. Review and confirm replacement of the current local vault.
 
-For durable recovery, keep at least one protected `.moneylog` file outside the browser
-profile and outside the device location you are trying to protect.
+An invalid password, corrupted file, or incompatible file must be rejected instead of silently replacing data. A protected external file is particularly important before browser cleanup or device migration.
 
-## Safe recovery workflow
+## Limits
 
-1. Keep Data Shield enabled.
-2. Keep the protected `.moneylog` file in a separate location.
-3. After a site-data reset, open MONEYLOG and choose Restore protected MONEYLOG.
-4. Enter the password used when the protected file was created.
-5. Confirm the restore before the local vault is replaced.
+- Installed PWAs do not have immunity from explicit deletion of site data.
+- Persistent storage can reduce automatic eviction but is not a backup.
+- The previous safe copy is stored in the same browser storage and can be lost with it.
+- Password and recovery code are local recovery mechanisms, not server-managed credentials.
+- A compromised device, malicious browser extension, or unlocked session can expose information.
+- If every copy of the vault is deleted and no usable encrypted backup or recovery material remains, recovery may be impossible.
 
-## Best practice
-
-For records that matter, keep more than one backup location. MONEYLOG is a local-first
-web application, not a cloud backup service.
+For important records, maintain an independently stored encrypted backup and verify periodically that the password and restore path work.

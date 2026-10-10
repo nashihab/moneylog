@@ -1,12 +1,11 @@
 {
-  "version": "2.5.4",
-  "released": "2026-10-05",
-  "title": "MONEYLOG 2.5.4",
+  "version": "2.6.0",
+  "released": "2026-10-10",
+  "title": "MONEYLOG 2.6.0",
   "notes": [
-    "Made update checks resilient to browser and service-worker cache behavior with a fresh release manifest request",
-    "Update now now waits for the new service worker to control the current tab before reloading",
-    "Added a direct app-shell refresh fallback so one update does not require closing and reopening MONEYLOG",
-    "Changed update reminders to a 1-day interval after Remind me later",
-    "Logged-in MONEYLOG sessions now recheck for releases automatically while the app is open"
+    "Introduces a restrained neumorphic visual system with matched light and dark themes",
+    "Improves UI responsiveness by removing pervasive backdrop blur and limiting expensive shadow transitions",
+    "Adds a browser security policy and tighter document metadata",
+    "Expands project documentation with architecture, data model, security boundaries, backup and deployment details"
   ]
 }

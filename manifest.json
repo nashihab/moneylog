@@ -4,8 +4,8 @@
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
-  "background_color": "#f4f6f2",
-  "theme_color": "#0d211b",
+  "background_color": "#e8ede8",
+  "theme_color": "#24674f",
   "description": "Your money. Your record. Your control.",
   "icons": [
     {

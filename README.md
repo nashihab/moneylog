@@ -1,257 +1,345 @@
 # MONEYLOG
 
-**Personal Money Journal**
+**Personal Money Journal**  
+**Your money. Your record. Your control.**
 
-Your money. Your record. Your control.
+MONEYLOG is a local-first Progressive Web App (PWA) for recording everyday finances and understanding personal cash flow. It brings account balances, income, expenses, transfers, budgets, savings goals, history, insights, and encrypted recovery into a single, lightweight interface.
 
-MONEYLOG is a local-first personal finance PWA for recording income, expenses, transfers,
-budgets, recurring entries, savings goals, and financial insights without requiring an
-online account or a cloud database.
+The product is designed around three principles: **clear financial records, private-by-default storage, and low-friction everyday use**. MONEYLOG is a record-keeping tool. It is not a bank, wallet, payment processor, investment product, or source of financial advice.
 
-> Copyright © 2026 nashihab. All rights reserved.
+- **Current version:** 2.6.0
+- **Application type:** Installable Progressive Web App
+- **Default currency:** Bangladeshi Taka (BDT / ৳)
+- **Storage:** Browser IndexedDB and local browser preferences
+- **Backend:** None required
+- **Data synchronization:** None
+- **License:** MONEYLOG Source-Available License 1.0
 
-## Why MONEYLOG
+## Contents
 
-MONEYLOG is designed for everyday use, not complicated accounting workflows.
+- [Product overview](#product-overview)
+- [Features](#features)
+- [Visual design](#visual-design)
+- [Financial model](#financial-model)
+- [Architecture](#architecture)
+- [Privacy and security](#privacy-and-security)
+- [Data protection and recovery](#data-protection-and-recovery)
+- [Installation](#installation)
+- [Browser preview](#browser-preview)
+- [Updates](#updates)
+- [Deployment](#deployment)
+- [Development and testing](#development-and-testing)
+- [Repository structure](#repository-structure)
+- [Compatibility and limitations](#compatibility-and-limitations)
+- [Copyright and usage](#copyright-and-usage)
+- [Project information](#project-information)
 
-- Private by default. Financial records stay in the local vault.
-- Encrypted vault. The active vault is protected with browser cryptography.
-- Installable. Use MONEYLOG as a standalone Web App or in the browser.
-- Offline-friendly. Core app files are cached for normal offline use.
-- Recovery-focused. Data Shield adds persistent-storage protection, a previous safe
-  vault copy, and an encrypted external recovery file.
-- No ads, analytics, banking connection, or payment processing.
+## Product overview
 
-## Main features
+MONEYLOG focuses on common personal-finance tasks without introducing accounting terminology or requiring an online profile. Its main navigation provides access to Home, History, Add, Insights, and Settings.
 
-### Home
+The Home dashboard surfaces total available money, monthly income and expenses, recent transactions, budget context, and account balances. History provides a searchable record of activity. Insights summarizes cash flow and category spending across date ranges. Settings contains preferences, security and recovery tools, reminders, and application updates.
 
-See total available money, monthly income and expenses, net flow, budget status,
-recent activity, and account balances.
+The installed PWA and browser version use the same application logic. The difference is the browser or operating system's installation and storage environment, not a separate financial data model.
 
-### History
+## Features
 
-Search and filter transactions, review transfers, edit records, and export transaction
-history as CSV.
+### Home dashboard
 
-### Insights
+- Total balance across active and archived personal accounts.
+- Monthly income, expenses, and net flow.
+- Recent transactions and account balances.
+- Optional hide/show control for monetary amounts.
+- Current date and budget context where available.
+- Quick access to income, expense, transfer, and account workflows.
+- A read-only demo preview for first-time visitors who have not created a local vault.
 
-Review cash flow, category spending, and account balances across useful time ranges.
+### Transactions
+
+MONEYLOG records three transaction types:
+
+- **Income** increases the selected account balance.
+- **Expense** decreases the selected account balance.
+- **Transfer** moves money between two personal accounts without changing total money or income/expense reports.
+
+Transactions include an amount, date, account, category where applicable, and optional note. Existing entries can be reviewed, edited, or deleted. The application validates monetary input and normalizes stored amounts before calculations.
 
 ### Accounts
 
-Manage cash, bank, savings, mobile money, and other accounts. Transfers keep account
-balances consistent without being counted as income or expense.
+Separate accounts support cash, bank accounts, mobile financial accounts, savings, and custom uses. Each account has an opening balance and a computed balance. Creating an account does not combine it with another account merely because the names match. Archived accounts retain historical records and remain represented in total-money calculations.
 
-### Budgets and goals
+### Categories and budgets
 
-Set an overall monthly spending limit and track personal savings goals without mixing
-planning figures into account balances.
+Default income and expense categories provide a compact starting point. A monthly spending budget can be set to compare expenses with a target. Transfers are excluded from spending totals. Budget tracking is optional and does not alter account balances.
 
-### Recurring entries
+### History and insights
 
-Create recurring income or expense entries. MONEYLOG generates due entries when the
-app opens and prevents duplicate generation.
+History supports transaction review, search, filters, editing, and CSV export. Insights includes date-based income/expense totals, category spending, recent monthly trends, and an account balance overview. The same transaction signs and balance rules are used across the dashboard and reports.
 
-### Reminders
+### Savings goals and recurring entries
 
-Optional daily reminders can be enabled from Settings. Delivery depends on browser
-and operating-system support.
+Savings goals track a target independently of ordinary account transactions. Recurring entries represent scheduled income or expense templates. Due entries are handled locally when the app opens, with duplicate prevention; recurring templates are not a cloud-scheduled service.
 
-## Security model
+### Appearance and reminders
 
-MONEYLOG is intentionally local-first. There is no server-side account system for your
-financial records.
+The interface includes light, dark, and system appearance options. The default appearance is light. Daily reminders can be enabled and configured from Settings. Reminder delivery depends on browser permission, platform support, and whether the application is allowed to run the relevant background capability.
 
-The vault uses authenticated encryption through the Web Crypto API. Password-based
-keys are derived with PBKDF2 and a per-vault salt.
+## Visual design
 
-The local recovery code is the supported password-reset method. Keep it somewhere safe.
-There is no email-based or cloud recovery system.
+MONEYLOG uses a restrained **neumorphic design system**. Raised surfaces identify interactive panels and controls, while inset surfaces distinguish inputs and selected states. The visual language uses a muted sage background, forest-green accents, rounded geometry, deliberate spacing, and tabular-number treatment for financial values.
 
-## Data Shield
+The light and dark palettes share the same information hierarchy. Income, expenses, warnings, and neutral information use consistent colors with text labels so meaning does not rely on color alone. Focus indicators, responsive layouts, mobile safe-area spacing, and reduced-motion preferences are part of the design system.
 
-Browser storage is not a permanent external backup. Clearing browser site data can
-remove IndexedDB, local storage, caches, and other origin data even when the app is
-installed as a PWA.
+Visual effects are intentionally restrained. Large blur filters are avoided across the main interface to reduce rendering cost on mobile devices. Motion is limited to short state transitions and small interaction feedback rather than continuous decorative animation.
 
-Data Shield is designed around that limitation.
+## Financial model
 
-1. **Encrypted vault**
-   Your active MONEYLOG records are encrypted in the local vault.
+### Monetary representation
 
-2. **Previous safe copy**
-   MONEYLOG keeps the previous encrypted vault record before replacing the current one,
-   providing a local recovery point for a bad write or corrupted latest record.
+Amounts are stored as integer minor units, with 100 minor units representing one displayed major currency unit. For BDT, a stored value of `125050` represents ৳1,250.50. Monetary input is validated before converting to minor units. Display formatting is separate from the underlying integer representation.
 
-3. **Persistent storage**
-   MONEYLOG requests persistent browser storage where the browser supports it. This can
-   reduce automatic eviction, but it cannot override an explicit site-data cleanup.
+### Account balance
 
-4. **External recovery file**
-   A password-protected `.moneylog` file can live outside browser storage. On browsers
-   with the File System Access API, MONEYLOG can keep the selected file updated while the
-   app is open.
+For each account:
 
-For important records, keep the protected `.moneylog` file somewhere outside the browser
-profile as well.
+```text
+Current balance
+  = Opening balance
+  + Income
+  - Expenses
+  - Transfers out
+  + Transfers in
+```
+
+Total available money is the sum of the computed balances for all accounts. A transfer between accounts changes the balances of its source and destination by equal and opposite amounts, leaving the total unchanged.
+
+### Reporting rules
+
+- Income and expenses are included in their corresponding report totals.
+- Transfers are excluded from income, expenses, and spending budgets.
+- Reports use local calendar date keys for period boundaries.
+- Current-month totals use the local calendar month rather than converting local midnight to UTC.
+- Zero and invalid monetary values do not produce a phantom balance.
+- Account balances are derived from opening balances and transactions instead of relying on a second manually maintained balance total.
+
+These rules are covered by the finance regression tests in `tests/finance.test.cjs`.
+
+## Architecture
+
+MONEYLOG is a static client-side application. It does not require an application server or a remote database.
+
+```text
+Browser or installed PWA
+        │
+        ├── HTML application shell
+        ├── CSS design system
+        └── JavaScript application logic
+                  │
+          ┌───────┴────────┐
+          │                │
+       IndexedDB       Web Crypto API
+   encrypted vault     PBKDF2 / AES-GCM
+          │                │
+          └───────┬────────┘
+                  │
+             Data Shield
+      safe snapshot / encrypted file
+
+Service Worker
+  app-shell cache, offline loading, release checks
+```
+
+### Application shell
+
+`index.html` loads the stylesheet and application logic, declares the web app manifest, and defines the root containers for the interface, notifications, and dialogs.
+
+### Application logic
+
+`assets/app.js` manages vault setup and unlock, validation, the application state, transaction workflows, calculations, reports, backups, reminders, and update behavior. Financial balances are derived from a centralized snapshot of account openings and transaction records. IndexedDB writes are coordinated to reduce the risk of overlapping vault saves.
+
+### Local persistence
+
+IndexedDB stores the encrypted vault and supporting metadata. Public preferences are kept separate from encrypted financial records where required for app behavior. The Service Worker caches the application shell so the interface can reopen offline after its resources have been cached.
+
+### Service Worker and release manifest
+
+`sw.js` handles app-shell caching, cache lifecycle, update activation, notification clicks, and supported periodic reminders. Cache cleanup is restricted to the `moneylog-cache-` namespace so unrelated applications hosted on the same origin are not removed. `version.json` describes the published application version and its update notes. The app checks the manifest while online and offers an update when a newer version is detected.
+
+## Privacy and security
+
+MONEYLOG is designed to keep financial records local. It does not require an online account and does not intentionally send transaction data to a remote service.
+
+### Vault protection
+
+- Password-based keys are derived using PBKDF2 with SHA-256 and a per-vault salt.
+- Vault content is encrypted with AES-GCM through the Web Crypto API.
+- AES-GCM uses authenticated encryption to detect modified ciphertext.
+- A recovery code provides a local password-recovery path.
+- Session access is cleared when the application is explicitly locked or the session expires according to its configured lock behavior.
+- The application entry point declares a Content Security Policy, limits unnecessary browser capabilities, and avoids inline JavaScript.
+
+These controls improve confidentiality and data integrity but do not make the application immune to compromised devices, malicious browser extensions, unsafe hosting, weak passwords, or other attacks against the local environment. A local user who can access an unlocked browser session may be able to view its data.
+
+### Recovery code
+
+The username and recovery code are stored for local verification and key recovery. They are not an online identity and cannot be sent by MONEYLOG to an email address. A forgotten password and lost recovery code may make an encrypted vault unrecoverable without an independent protected backup.
+
+## Data protection and recovery
+
+Browser storage is managed by the browser and operating system. An installed PWA does not make its IndexedDB data immune to deliberate site-data deletion, profile removal, browser reset, or device failure.
+
+Data Shield uses several complementary mechanisms:
+
+1. **Encrypted primary vault:** financial state is encrypted before being written to IndexedDB.
+2. **Previous safe copy:** a previous encrypted vault record can provide a recovery point if the latest write is missing or unreadable.
+3. **Persistent storage request:** where supported, MONEYLOG requests persistent browser storage to reduce automatic eviction. This does not prevent explicit deletion.
+4. **External protected file:** a password-protected `.moneylog` file provides recovery outside the browser's site storage.
+5. **Encrypted export and restore:** a versioned file format enables an encrypted backup to be exported and restored with a password.
+
+A protected external file should be kept separately from the browser profile. On browsers that support the File System Access API, a selected protected file can be updated while MONEYLOG is running. Other browsers can use downloaded encrypted backup files.
+
+Restore validates the backup and its password before asking for confirmation to replace the local vault. A backup password is not stored in plaintext in the export file. Losing both the local vault and the necessary recovery material can result in permanent data loss; regular independent backups remain important.
+
+More detail is available in [`docs/DATA-PROTECTION.md`](docs/DATA-PROTECTION.md).
 
 ## Installation
 
-### Recommended: Install Web App
+### Installable Web App
 
-Open MONEYLOG in a supported browser and choose **Install Web App**. The app then opens
-in its own app-style window.
+On a supported browser, the installation option adds MONEYLOG to the device's app launcher or home screen. The installed app opens in a standalone window and uses the same local-first application.
+
+- **Android:** a supported browser such as Chrome may offer Install app or Add to Home screen.
+- **iOS and iPadOS:** Safari offers Add to Home Screen through the Share menu.
+- **Desktop:** compatible browsers may expose an install icon or install command in the browser menu.
+
+Exact menu labels and installation support vary by browser and operating-system version. No APK is required.
 
 ### Browser version
 
-Choose **Use Web Version** when you prefer to stay in a normal browser tab. The same
-features are available, but the browser still controls the storage lifecycle.
+The browser version is available for a quick visit or demo. It shares the PWA's browser storage boundaries. The read-only preview is not the same as a registered vault and does not seed demo transactions into a user's real financial data.
 
-### First setup
+### First-time setup
 
-Create a local username, password, and recovery code. The setup screen also provides
-Install Web App and Use Web Version controls, so the access mode can be chosen before
-creating the vault.
+A new local vault is created with a username, password, and recovery code. Those values belong to the device's local MONEYLOG profile; they do not create a cloud account. An existing vault is opened with its username and password. The recovery code is used for local password recovery.
 
-## Backup and restore
+## Browser preview
 
-### Encrypted backup
+A fresh browser visit without an existing vault can open a read-only Home preview populated with clearly illustrative sample records. It provides a view of the dashboard without creating or saving fake financial data. Starting a real data action transfers the session into the setup flow before any user-entered records are saved.
 
-Use Settings to download a password-protected `.moneylog` backup. Keep the file in a
-separate location from the browser profile.
-
-### Protected recovery file
-
-Data Shield can create a protected `.moneylog` file and remember the file handle on
-supported browsers. Future saves can update that file automatically while MONEYLOG is
-running.
-
-### Restore
-
-Restore verifies the protected file and its password before replacing the current local
-vault. Existing local data is not replaced without confirmation.
+The preview is also available through `demo.html` or the `?demo=1` query parameter. Demo totals are illustrative and should not be interpreted as real financial records.
 
 ## Updates
 
-MONEYLOG checks `version.json` when online.
+The update manifest is `version.json`. Its `version` field is compared with the application's compiled version. When a newer release is available, MONEYLOG offers an update prompt with **Update now** and **Remind me later**. The reminder interval is 24 hours.
 
-If you publish a new release, increase `APP_VERSION` in `assets/app.js` and the `version` in `version.json`. If the service worker code itself changes, also increase `CACHE_VERSION` in `sw.js`. The update flow can refresh the active app cache directly when `sw.js` did not change, so users do not need a second update just because the worker script stayed the same.
+The update flow refreshes the Service Worker registration and app-shell resources, waits for the new controller to take over where supported, then reloads into the updated app. The local encrypted vault is stored separately from the app-shell cache and is not intentionally replaced by a software update.
 
-When a newer release is available, the interface shows **Update now**. The update flow:
+A release should keep these identifiers aligned:
 
-1. refreshes the service-worker registration with HTTP cache bypass;
-2. installs the new app-shell cache with reload semantics;
-3. promotes the waiting service worker with `skipWaiting`;
-4. waits for the new worker to control the page;
-5. reloads MONEYLOG once the new app shell is active.
+- `APP_VERSION` in `assets/app.js`
+- the cache name in `sw.js`
+- `version` and release notes in `version.json`
+- user-facing documentation where a version is explicitly documented
 
-The financial vault is stored separately from the PWA cache, so app updates do not
-replace transaction data.
+Published deployments should serve `version.json` without long-lived intermediary caching so clients can discover a release. Static-host cache rules may be used to ensure that the manifest is revalidated promptly.
 
 ## Deployment
 
-MONEYLOG is designed for static hosting such as GitHub Pages.
+MONEYLOG is suitable for static HTTPS hosting. No server-side runtime, cloud database, or build bundle is required. The repository files are deployed at the host's site root, with `index.html` remaining in the root and the relative paths preserved.
 
-Upload the contents of this repository as-is. `index.html` remains at the repository
-root because it is the application entry point.
+A production deployment should provide:
 
-A production deployment should serve the site over HTTPS. Service workers and Web Crypto
-require a secure context in normal production use.
+- HTTPS, required for reliable Service Worker and Web Crypto operation outside localhost.
+- Correct same-origin serving of `index.html`, `assets/`, `manifest.json`, `version.json`, and `sw.js`.
+- Fast revalidation for `version.json` and appropriate caching for versioned app assets.
+- A restrictive response-header security policy where the hosting platform supports custom headers. The HTML entry point also defines a meta Content Security Policy.
+- A backup and restore procedure appropriate for locally stored financial data.
+
+Static hosting examples include GitHub Pages and compatible static site providers. Browser APIs such as notifications and the File System Access API vary by platform; unsupported features are not guaranteed to be available everywhere.
+
+## Development and testing
+
+The project does not require a transpilation or bundling step. A local static server can serve the files during development. Service Worker and cryptographic behavior should be tested on localhost or an HTTPS origin rather than a `file://` URL.
+
+Example local server:
+
+```bash
+python -m http.server 8080
+```
+
+Open `http://localhost:8080` in a compatible browser.
+
+### Finance regression tests
+
+The Node.js test file extracts the calculation and normalization functions from `assets/app.js` and exercises invariants including:
+
+- duplicate account names remain separate;
+- a newly created zero-balance account remains zero;
+- income increases and expenses decrease the correct balance;
+- a transfer changes account balances without changing total money;
+- stored transaction magnitudes are normalized safely;
+- broken account references receive a valid fallback;
+- archived account balances remain in the total.
+
+Run the tests with Node.js:
+
+```bash
+node tests/finance.test.cjs
+```
+
+A successful run prints `FINANCE_TESTS_PASS`.
+
+### Manual acceptance areas
+
+Release testing should also cover account creation and editing, income/expense/transfer changes, backup export and restore, wrong-password handling, mobile keyboard behavior on setup/login, installation, offline reopening after the shell has been cached, update prompts, light/dark themes, reduced-motion settings, and layouts at narrow viewport widths. Browser support differs, so important workflows should be checked in the target browsers and on physical devices as well as by static tests.
 
 ## Repository structure
 
 ```text
 MONEYLOG/
-├── index.html
-├── manifest.json
-├── sw.js
-├── version.json
-├── README.md
-├── LICENSE
+├── index.html                 # Application entry point and security metadata
+├── demo.html                  # Read-only demo entry point
+├── manifest.json              # Installable PWA metadata and icons
+├── sw.js                      # Offline cache, lifecycle and notification handlers
+├── version.json               # Published version and update notes
+├── README.md                  # Product, architecture and operating reference
+├── LICENSE                    # Source-available usage terms
 ├── assets/
-│   ├── app.js
-│   ├── styles.css
-│   ├── icon.svg
-│   ├── icon-192.png
-│   └── icon-512.png
-└── docs/
-    ├── DATA-PROTECTION.md
-    └── FILE-STRUCTURE.md
+│   ├── app.js                 # UI, vault, calculations and app workflows
+│   ├── styles.css             # Responsive design system and themes
+│   ├── icon.svg               # Scalable application icon
+│   ├── icon-192.png           # PWA icon
+│   └── icon-512.png           # High-resolution PWA icon
+├── docs/
+│   ├── DATA-PROTECTION.md     # Vault, recovery and storage limitations
+│   └── FILE-STRUCTURE.md      # Directory and file responsibilities
+└── tests/
+    └── finance.test.cjs       # Finance invariants and normalization checks
 ```
 
-## Development notes
+## Compatibility and limitations
 
-MONEYLOG does not require a backend for its core functionality. A simple static server
-is enough for local development.
-
-For example:
-
-```text
-python -m http.server 8080
-```
-
-Then open the local HTTPS/secure-context equivalent supported by your development setup.
-For service-worker and Web Crypto behavior, production HTTPS is the authoritative
-environment.
-
-## Privacy
-
-MONEYLOG does not intentionally upload your financial records to a remote service.
-There is no analytics SDK, advertising network, banking connector, or payment service.
-
-Your browser, operating system, backup destination, and device security still matter.
-No local web application can guarantee recovery after deliberate deletion of browser
-site data unless an external backup exists.
+- MONEYLOG requires a modern browser with IndexedDB, Web Crypto, and JavaScript support.
+- Service Workers and Web Crypto require a secure context, typically HTTPS or localhost.
+- Browser storage can be removed by explicit site-data cleanup or profile deletion.
+- Install prompts, background notifications, periodic sync, and filesystem handles depend on browser and operating-system support.
+- There is no bank integration, payment processing, cloud synchronization, multi-user sharing, or remote recovery service.
+- The application is not a native Android application and does not use Android Keystore, Room, or BiometricPrompt.
+- Local encryption protects stored vault content, but it does not secure a device that is already compromised or an unlocked session accessible to another person.
 
 ## Copyright and usage
 
 Copyright © 2026 nashihab. All rights reserved.
 
-The source is **source-available and not distributed under an OSI-approved open-source license**.
-Viewing, studying, and private non-commercial use are permitted under the accompanying
-`LICENSE` file.
+MONEYLOG is distributed under **MONEYLOG Source-Available License 1.0**. The source may be viewed, studied, and run locally for personal, educational, and non-commercial purposes, subject to the license. Public redistribution, republishing, commercial distribution, white-labeling, and presenting a copy or derivative as the original project require prior written permission.
 
-Public re-uploading, redistribution, white-labeling, commercial packaging, and claiming
-a copy or derivative as your own are not permitted without written permission.
+The license is source-available and is **not an OSI-approved open-source license**. The complete terms are in [`LICENSE`](LICENSE).
 
-Do not remove the original copyright or attribution.
+## Project information
 
-## About
+**MONEYLOG - Personal Money Journal**  
+Made with ♥ by nashihab  
+Developer: <https://nashihab.github.io>  
+Project: <https://github.com/nashihab/moneylog>
 
-**MONEYLOG - Personal Money Journal**
-
-Made with ♥ by nashihab
-
-Developer: https://nashihab.github.io
-
-Original project: https://github.com/nashihab/moneylog
-
-
-## Web preview
-
-A first-time browser visit opens a read-only Home preview automatically. It is a safe
-way to explore the interface before creating a local vault. The preview uses sample
-records and never writes them to the user's MONEYLOG vault.
-
-The moment you choose a real data action, MONEYLOG switches to secure setup and asks
-for a local username, password, and recovery code. After setup, the normal private
-local-vault experience continues as usual. The explicit `demo.html` and `?demo=1`
-entry points remain available for the same read-only preview.
-
-## 2.5.4
-
-This release hardens the financial calculation layer. Duplicate Cash accounts are no longer
-automatically merged, new zero-balance accounts remain independent, stored money magnitudes
-are normalized safely, account and transaction references are repaired on load, and account
-balances, transfers, and period totals now use one calculation path. Local-date handling is
-also corrected so Bangladesh time-zone offsets cannot shift recurring entries or month reports.
-Editing records keeps archived account and category selections intact, and an account with a
-non-zero balance cannot be silently archived out of the active money picture.
-
-## 2.5.1
-
-This release fixes the in-place update handoff, removes the Home mobile spacing issue,
-and makes the first-time browser experience a read-only Home preview before secure
-account setup. It also hardens the service-worker/cache update fallback and smooths
-core interaction transitions.
+MONEYLOG is a private financial record-keeping tool. It does not provide financial, investment, banking, tax, or legal advice. Financial records should be verified independently when used for consequential decisions.

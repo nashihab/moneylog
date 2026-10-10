@@ -1,26 +1,29 @@
 # MONEYLOG File Structure
 
-The repository is organized so GitHub Pages can deploy it directly without a build step.
+The repository is a static Progressive Web App. Its files are served directly and do not require a compilation or bundling process.
 
-```text
-MONEYLOG/
-├── index.html          Application entry point
-├── demo.html           Read-only demo entry point
-├── manifest.json       PWA manifest
-├── sw.js               Service worker and offline cache
-├── version.json        Public release metadata used by update checks
-├── README.md           Project documentation
-├── LICENSE             Source-available usage terms
-├── assets/
-│   ├── app.js          Application logic and state handling
-│   ├── styles.css      Application UI styles
-│   ├── icon.svg        Vector app icon
-│   ├── icon-192.png    PWA installation icon
-│   └── icon-512.png    PWA installation icon
-└── docs/
-    ├── DATA-PROTECTION.md
-    └── FILE-STRUCTURE.md
-```
+| Path | Responsibility |
+|---|---|
+| `index.html` | Root entry point, security metadata, manifest/style links, application mount point |
+| `demo.html` | Lightweight read-only demo entry point |
+| `manifest.json` | Install name, start URL, display mode, theme colors, and app icons |
+| `sw.js` | Service Worker install/activation, app-shell cache, offline fallback, notifications, periodic reminders |
+| `version.json` | Current published version and release notes checked by the update flow |
+| `assets/app.js` | Local vault, login/setup, validation, state, financial calculations, history, insights, backup, restore, update flow |
+| `assets/styles.css` | Layout, responsive rules, neumorphic surfaces, color tokens, light/dark theme, focus, motion preferences |
+| `assets/icon.svg` | Scalable MONEYLOG icon |
+| `assets/icon-192.png` | 192-pixel PWA icon |
+| `assets/icon-512.png` | 512-pixel PWA icon |
+| `docs/DATA-PROTECTION.md` | Storage model, encrypted backups, recovery, and limitations |
+| `docs/FILE-STRUCTURE.md` | Repository file inventory and responsibility map |
+| `tests/finance.test.cjs` | Node-based tests for financial calculations and data normalization |
+| `README.md` | Product overview, features, financial model, architecture, operation, security, deployment, and tests |
+| `LICENSE` | Source-available usage restrictions and permissions |
 
-Do not move `index.html`, `manifest.json`, `sw.js`, or `version.json` away from the root
-without also changing deployment paths and the service-worker scope.
+## Key dependencies
+
+The application relies on built-in browser APIs: IndexedDB, Web Crypto, Service Workers, the web app manifest, and standard DOM/CSS functionality. Notification, periodic background sync, persistent storage, and File System Access capabilities depend on browser support and user permission.
+
+## Release consistency
+
+A published release aligns `APP_VERSION` in `assets/app.js`, the cache identifier in `sw.js`, and the `version` field in `version.json`. The entry point and all app-shell resources remain at the paths listed in the Service Worker's core asset list. The encrypted user vault is stored separately from the Service Worker cache.
