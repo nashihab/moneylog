@@ -7,7 +7,7 @@ MONEYLOG is a local-first Progressive Web App (PWA) for recording everyday finan
 
 The product is designed around three principles: **clear financial records, private-by-default storage, and low-friction everyday use**. MONEYLOG is a record-keeping tool. It is not a bank, wallet, payment processor, investment product, or source of financial advice.
 
-- **Current version:** 2.6.0
+- **Current version:** 2.6.1
 - **Application type:** Installable Progressive Web App
 - **Default currency:** Bangladeshi Taka (BDT / ৳)
 - **Storage:** Browser IndexedDB and local browser preferences

@@ -1,10 +1,10 @@
 {
-  "version": "2.6.0",
+  "version": "2.6.1",
   "released": "2026-10-10",
-  "title": "MONEYLOG 2.6.0",
+  "title": "MONEYLOG 2.6.1",
   "notes": [
-    "Introduces a restrained neumorphic visual system with matched light and dark themes",
-    "Improves UI responsiveness by removing pervasive backdrop blur and limiting expensive shadow transitions",
+    "Refines the interface with subtle depth, restrained shadows, and matched light and dark themes",
+    "Improves scroll reliability and keeps visual effects lightweight on mobile devices",
     "Adds a browser security policy and tighter document metadata",
     "Expands project documentation with architecture, data model, security boundaries, backup and deployment details"
   ]

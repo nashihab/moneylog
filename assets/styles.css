@@ -480,3 +480,33 @@ tbody tr:hover{background:color-mix(in srgb,var(--brand-soft) 36%,var(--surface)
 /* Readable text accents and a low-cost authentication canvas. */
 :root{--muted:#58695e;--income:#216842;--expense:#a8433d}
 .auth:before{display:none;filter:none}
+
+/* MONEYLOG 2.6.1: restore natural document scrolling and use restrained depth. */
+html,body{height:auto;min-height:100%;overflow-x:hidden;overflow-y:auto!important;overscroll-behavior-y:auto}
+body.modal-open{overflow:hidden!important}
+.app-shell{min-height:100dvh;height:auto;overflow:visible}
+.main,.content{min-height:0;overflow:visible}
+:root{
+  --bg:#f2f5f2;--surface:#ffffff;--surface-2:#f5f8f5;--surface-3:#e8eee9;
+  --ink:#1c2b24;--muted:#5f7066;--line:#dce5de;--brand:#24674f;--brand-2:#1e4b39;
+  --brand-soft:#e0eee6;--glass-bg:#ffffff;
+  --neo-raised:0 8px 24px rgba(24,49,34,.075),0 1px 2px rgba(24,49,34,.045);
+  --neo-raised-sm:0 3px 10px rgba(24,49,34,.065),0 1px 2px rgba(24,49,34,.035);
+  --neo-inset:inset 0 1px 3px rgba(24,49,34,.08);
+  --neo-inset-sm:inset 0 1px 2px rgba(24,49,34,.07);
+  --radius:17px;
+}
+[data-theme="dark"]{
+  --bg:#101713;--surface:#18221c;--surface-2:#1d2a22;--surface-3:#25352b;
+  --ink:#e9f1eb;--muted:#a3b2a8;--line:#2b3b30;--brand:#83c7a0;--brand-2:#14291d;
+  --brand-soft:#263f30;--glass-bg:#18221c;
+  --neo-raised:0 8px 24px rgba(0,0,0,.22),0 1px 2px rgba(0,0,0,.16);
+  --neo-raised-sm:0 3px 10px rgba(0,0,0,.20),0 1px 2px rgba(0,0,0,.12);
+  --neo-inset:inset 0 1px 3px rgba(0,0,0,.22);
+  --neo-inset-sm:inset 0 1px 2px rgba(0,0,0,.18);
+}
+.card,.account-card,.quick,.table-wrap,.modal,.auth-card,.side-card,.auth-access,.demo-banner,.data-shield-card{border-color:var(--line);}
+.card,.account-card,.quick,.table-wrap,.modal,.auth-card,.side-card,.auth-access,.demo-banner,.data-shield-card{box-shadow:var(--neo-raised);}
+.quick .qicon,.avatar,.auth-access-icon,.shield-heading-icon,.shield-prompt-icon{box-shadow:var(--neo-inset-sm);}
+.input,.select,.textarea{box-shadow:var(--neo-inset-sm);}
+@media(max-width:900px){.app-shell{display:block;overflow:visible}.main{overflow:visible}.sidebar{height:auto}}

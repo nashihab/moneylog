@@ -1,5 +1,5 @@
 /* MONEYLOG PWA - local-first encrypted personal finance journal */
-const APP_VERSION = '2.6.0';
+const APP_VERSION = '2.6.1';
 const UPDATE_MANIFEST_URL = './version.json';
 const DB_NAME = 'moneylog-secure-v2';
 const DB_VERSION = 1;
@@ -946,6 +946,7 @@ function queueUpdatePrompt(delay=160){
 }
 
 async function checkForUpdate(force=false){
+  if(demoMode)return {status:'demo'};
   try{
     const last=Number(localStorage.getItem('moneylog-update-check')||0);
     if(!force&&Date.now()-last<10*60*1000)return {status:'skipped'};
@@ -1131,6 +1132,23 @@ async function registerSW(){
     const reg=await navigator.serviceWorker.register('./sw.js',{updateViaCache:'none'});
     const pending=localStorage.getItem('moneylog-pending-update');
     if(pending && pending===APP_VERSION) localStorage.removeItem('moneylog-pending-update');
+    if(demoMode){
+      const reloadKey=`moneylog-demo-reloaded-${APP_VERSION}`;
+      const reloadForNewShell=()=>{
+        if(!navigator.serviceWorker.controller || sessionStorage.getItem(reloadKey)==='1')return;
+        sessionStorage.setItem(reloadKey,'1');
+        location.reload();
+      };
+      navigator.serviceWorker.addEventListener('controllerchange',reloadForNewShell);
+      const activateWhenReady=worker=>{
+        if(!worker)return;
+        if(worker.state==='installed' && navigator.serviceWorker.controller)worker.postMessage({type:'SKIP_WAITING'});
+        worker.addEventListener('statechange',()=>{if(worker.state==='installed'&&navigator.serviceWorker.controller)worker.postMessage({type:'SKIP_WAITING'});});
+      };
+      activateWhenReady(reg.installing);
+      reg.addEventListener('updatefound',()=>activateWhenReady(reg.installing));
+      if(reg.waiting && navigator.serviceWorker.controller)reg.waiting.postMessage({type:'SKIP_WAITING'});
+    }
     return reg;
   }catch{return null;}
 }
@@ -1334,7 +1352,7 @@ window.addEventListener('pageshow',()=>{if(state)resetAutoLockTimer();});
       sessionKey={demo:true};
       applyTheme();
       renderApp();
-      checkForUpdate(true);
+      // Demo previews silently adopt the newest deployed shell; update prompts are for the private app only.
       return;
     }
     if(!security){ clearSession(); await setupPassword(); }
